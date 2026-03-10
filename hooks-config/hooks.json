@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST http://YOUR_SERVER_IP:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"SessionStart\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"New Claude Code session started\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
+            "command": "curl -s -X POST http://100.87.235.73:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"SessionStart\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"New Claude Code session started\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST http://YOUR_SERVER_IP:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"SessionEnd\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Claude Code session ended\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
+            "command": "curl -s -X POST http://100.87.235.73:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"SessionEnd\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Claude Code session ended\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST http://YOUR_SERVER_IP:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"TaskCompleted\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Task completed\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
+            "command": "curl -s -X POST http://100.87.235.73:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"TaskCompleted\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Task completed\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST http://YOUR_SERVER_IP:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"PostToolUse\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Tool used: '\"$CLAUDE_TOOL_NAME\"'\",\"project\":\"'\"$(basename $(pwd))\"'\",\"metadata\":{\"tool\":\"'\"$CLAUDE_TOOL_NAME\"'\"}}' > /dev/null 2>&1 &"
+            "command": "curl -s -X POST http://100.87.235.73:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"PostToolUse\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Tool used: '\"$CLAUDE_TOOL_NAME\"'\",\"project\":\"'\"$(basename $(pwd))\"'\",\"metadata\":{\"tool\":\"'\"$CLAUDE_TOOL_NAME\"'\"}}' > /dev/null 2>&1 &"
           }
         ]
       }
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST http://YOUR_SERVER_IP:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"SubagentStart\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Sub-agent spawned\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
+            "command": "curl -s -X POST http://100.87.235.73:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"SubagentStart\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Sub-agent spawned\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
           }
         ]
       }
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST http://YOUR_SERVER_IP:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"SubagentStop\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Sub-agent finished\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
+            "command": "curl -s -X POST http://100.87.235.73:3147/api/hooks -H 'Content-Type: application/json' -d '{\"event\":\"SubagentStop\",\"session_id\":\"'\"$CLAUDE_SESSION_ID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\",\"summary\":\"Sub-agent finished\",\"project\":\"'\"$(basename $(pwd))\"'\"}' > /dev/null 2>&1 &"
           }
         ]
       }
