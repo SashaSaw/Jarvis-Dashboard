@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jarvis Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>">
+</head>
+<body>
+  <header class="header">
+    <h1>🐶 Jarvis Dashboard</h1>
+    <div class="status"><span class="dot"></span>Last updated: <span id="last-update">--</span></div>
+  </header>
+
+  <div class="dashboard">
+    <!-- Stats Row -->
+    <div class="stats-row">
+      <div class="stat-card green">
+        <div class="stat-value" id="stat-tasks">-</div>
+        <div class="stat-label">Tasks Completed</div>
+      </div>
+      <div class="stat-card blue">
+        <div class="stat-value" id="stat-tool-uses">-</div>
+        <div class="stat-label">Tool Uses Today</div>
+      </div>
+      <div class="stat-card accent">
+        <div class="stat-value" id="stat-sessions">-</div>
+        <div class="stat-label">Active Sessions</div>
+      </div>
+      <div class="stat-card orange">
+        <div class="stat-value" id="stat-events">-</div>
+        <div class="stat-label">Events Today</div>
+      </div>
+    </div>
+
+    <!-- Projects -->
+    <div class="card" id="projects-card">
+      <div class="card-header">
+        <span class="card-title">📋 Projects</span>
+        <span class="card-badge" style="background:var(--accent-dim);color:var(--accent)">Trello</span>
+      </div>
+      <div id="projects-content">
+        <div class="loading"><div class="spinner"></div> Loading...</div>
+      </div>
+    </div>
+
+    <!-- Schedule -->
+    <div class="card" id="calendar-card">
+      <div class="card-header">
+        <span class="card-title">📅 Upcoming Schedule</span>
+        <span class="card-badge" style="background:var(--blue-dim);color:var(--blue)">7 days</span>
+      </div>
+      <div id="calendar-content">
+        <div class="loading"><div class="spinner"></div> Loading...</div>
+      </div>
+    </div>
+
+    <!-- Active Sessions -->
+    <div class="card" id="sessions-card">
+      <div class="card-header">
+        <span class="card-title">⚡ Active Agent Sessions</span>
+      </div>
+      <div id="sessions-content">
+        <div class="loading"><div class="spinner"></div> Loading...</div>
+      </div>
+    </div>
+
+    <!-- Quick Info -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">ℹ️ System</span>
+      </div>
+      <div style="font-size:0.85rem; color:var(--text-secondary);">
+        <p><strong>Webhook:</strong> <code style="font-family:var(--font-mono);font-size:0.8rem;background:var(--bg-primary);padding:0.15rem 0.4rem;border-radius:4px;">POST /api/hooks</code></p>
+        <p style="margin-top:0.5rem"><strong>Dashboard:</strong> Auto-refreshes every 30s</p>
+        <p style="margin-top:0.5rem"><strong>Server:</strong> <span id="server-time">--</span></p>
+      </div>
+    </div>
+
+    <!-- Activity Feed -->
+    <div class="card activity-feed">
+      <div class="card-header">
+        <span class="card-title">📡 Agent Activity Feed</span>
+        <span class="card-badge" style="background:var(--green-dim);color:var(--green)" id="feed-count">0 events</span>
+      </div>
+      <ul class="feed-list" id="activity-feed">
+        <li class="empty-state">No agent activity yet. Configure Claude Code hooks to start seeing events here.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
