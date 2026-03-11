@@ -630,10 +630,29 @@ body {
   background: var(--green); animation: pulse 2s infinite;
 }
 
-.session-summary { font-size: 0.85rem; margin-top: 0.2rem; }
+.session-active-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--green);
+  animation: pulse 2s infinite;
+  flex-shrink: 0;
+}
+
+.session-summary { font-size: 0.85rem; margin-top: 0.2rem; color: var(--text-secondary); }
+.session-meta {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
 .session-time {
   font-size: 0.7rem; color: var(--text-muted);
-  font-family: var(--font-mono); margin-top: 0.25rem;
+  font-family: var(--font-mono);
+}
+.session-events {
+  font-size: 0.7rem; color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 /* ===== ACTIVITY FEED ===== */

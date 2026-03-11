@@ -100,7 +100,7 @@ async function getAllBoards() {
 
   const boards = await Promise.all([
     getFullBoard(BOARDS.adventune, 'Adventune 🎵'),
-    getFullBoard(BOARDS.habitat, 'Habitat 🏠')
+    getFullBoard(BOARDS.habitat, 'Sown 🌱')
   ]);
 
   return { boards };

@@ -64,25 +64,27 @@ const getStats = db.prepare(`
   SELECT
     (SELECT COUNT(*) FROM events WHERE event_type = 'TaskCompleted' AND created_at >= date('now')) as tasks_today,
     (SELECT COUNT(*) FROM events WHERE event_type IN ('PostToolUse') AND created_at >= date('now')) as tool_uses_today,
-    (SELECT COUNT(DISTINCT session_id) FROM events WHERE event_type = 'SessionStart' AND session_id NOT IN (
-      SELECT COALESCE(session_id, '') FROM events WHERE event_type = 'SessionEnd'
-    ) AND created_at >= datetime('now', '-24 hours')) as active_sessions,
+    (SELECT COUNT(DISTINCT project) FROM events
+      WHERE project IS NOT NULL
+        AND created_at >= datetime('now', '-30 minutes')
+        AND (SELECT event_type FROM events e3 WHERE e3.project = events.project ORDER BY e3.created_at DESC LIMIT 1) != 'SessionEnd'
+    ) as active_sessions,
     (SELECT COUNT(*) FROM events WHERE created_at >= date('now')) as events_today
 `);
 
 const getActiveSessions = db.prepare(`
-  SELECT e1.session_id, e1.project, e1.summary, e1.created_at as started_at
-  FROM events e1
-  WHERE e1.event_type = 'SessionStart'
-    AND e1.session_id IS NOT NULL
-    AND e1.created_at >= datetime('now', '-24 hours')
-    AND NOT EXISTS (
-      SELECT 1 FROM events e2
-      WHERE e2.event_type = 'SessionEnd'
-        AND e2.session_id = e1.session_id
-        AND e2.created_at > e1.created_at
-    )
-  ORDER BY e1.created_at DESC
+  SELECT
+    project,
+    MAX(created_at) as last_activity,
+    (SELECT summary FROM events e2 WHERE e2.project = events.project ORDER BY e2.created_at DESC LIMIT 1) as last_summary,
+    COUNT(*) as event_count
+  FROM events
+  WHERE project IS NOT NULL
+    AND created_at >= datetime('now', '-30 minutes')
+  GROUP BY project
+  HAVING
+    (SELECT event_type FROM events e3 WHERE e3.project = events.project ORDER BY e3.created_at DESC LIMIT 1) != 'SessionEnd'
+  ORDER BY last_activity DESC
 `);
 
 const upsertAgentStatus = db.prepare(`

@@ -434,11 +434,14 @@ function renderSessions(sessions) {
   el.innerHTML = sessions.map(s => `
     <div class="session-card">
       <div class="session-project">
-        <span class="session-project-dot"></span>
-        ${s.project || 'Unknown project'}
+        <span class="session-active-dot"></span>
+        ${escapeHtml(s.project || 'Unknown project')}
       </div>
-      <div class="session-summary">${s.summary || 'Working...'}</div>
-      <div class="session-time">Started ${timeAgo(s.started_at)}</div>
+      <div class="session-summary">${escapeHtml(s.last_summary || 'Working...')}</div>
+      <div class="session-meta">
+        <span class="session-time">Last activity: ${timeAgo(s.last_activity)}</span>
+        <span class="session-events">${s.event_count} event${s.event_count !== 1 ? 's' : ''} in last 30m</span>
+      </div>
     </div>
   `).join('');
 }
