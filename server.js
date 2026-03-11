@@ -125,19 +125,29 @@ app.delete('/api/trello/cards/:cardId', async (req, res) => {
 
 // --- Jarvis Status ---
 
-let jarvisStatus = null;
+let agentStatuses = {};
 
-app.post('/api/jarvis/status', (req, res) => {
+app.post('/api/agent/:name/status', (req, res) => {
   try {
-    jarvisStatus = { ...req.body, updated_at: new Date().toISOString() };
+    agentStatuses[req.params.name] = { ...req.body, updated_at: new Date().toISOString() };
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+app.get('/api/agent/:name/status', (req, res) => {
+  res.json(agentStatuses[req.params.name] || { error: 'No status yet' });
+});
+
+// Backwards compat
+app.post('/api/jarvis/status', (req, res) => {
+  agentStatuses.jarvis = { ...req.body, updated_at: new Date().toISOString() };
+  res.json({ ok: true });
+});
+
 app.get('/api/jarvis/status', (req, res) => {
-  res.json(jarvisStatus || { error: 'No status yet' });
+  res.json(agentStatuses.jarvis || { error: 'No status yet' });
 });
 
 // --- Calendar ---

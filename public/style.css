@@ -319,9 +319,9 @@ body {
 .label-pink { background: #f472b6; }
 .label-black { background: #6b7280; }
 
-/* ===== JARVIS STATUS ===== */
-.jarvis-status-card {
-  grid-column: 1 / -1;
+/* ===== AGENT STATUS ===== */
+.agent-status-card {
+  /* each takes one column in the 2-col grid */
 }
 
 .jarvis-meter {

@@ -265,12 +265,12 @@ document.addEventListener('keydown', (e) => {
 
 // --- Other Sections ---
 
-function renderJarvisStatus(status) {
-  const el = document.getElementById('jarvis-status-content');
-  const badge = document.getElementById('jarvis-status-badge');
+function renderAgentStatus(status, contentId, badgeId, agentName) {
+  const el = document.getElementById(contentId);
+  const badge = document.getElementById(badgeId);
 
   if (!status || status.error) {
-    el.innerHTML = '<div class="empty-state">Jarvis status not available</div>';
+    el.innerHTML = `<div class="empty-state">${agentName} status not available</div>`;
     badge.textContent = 'Offline';
     badge.style.background = 'var(--red-dim)';
     badge.style.color = 'var(--red)';
@@ -299,48 +299,34 @@ function renderJarvisStatus(status) {
   if (contextPct >= 80) barClass = 'danger';
   else if (contextPct >= 60) barClass = 'warning';
 
-  let pctColor = 'accent';
-  if (contextPct >= 80) pctColor = 'red';
-  else if (contextPct >= 60) pctColor = 'orange';
+  // Build stats — only show what's available
+  const statsHtml = [
+    status.model ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Model</div><div class="jarvis-stat-value accent">${status.model}</div></div>` : '',
+    status.tokens_in || status.tokens_out ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Tokens In / Out</div><div class="jarvis-stat-value blue">${status.tokens_in || '—'} / ${status.tokens_out || '—'}</div></div>` : '',
+    status.cache_hit ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Cache</div><div class="jarvis-stat-value green">${status.cache_hit} hit · ${status.cache_cached || '—'} cached</div></div>` : '',
+    status.compactions !== undefined ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Compactions</div><div class="jarvis-stat-value ${status.compactions > 0 ? 'orange' : 'green'}">${status.compactions}</div></div>` : '',
+    status.task ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Current Task</div><div class="jarvis-stat-value" style="font-size:0.8rem">${status.task}</div></div>` : '',
+    status.project ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Project</div><div class="jarvis-stat-value orange">${status.project}</div></div>` : '',
+    status.session ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Session</div><div class="jarvis-stat-value" style="font-size:0.75rem">${status.session}</div></div>` : '',
+    status.thinking ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Thinking</div><div class="jarvis-stat-value">${status.thinking}</div></div>` : '',
+    status.status_text ? `<div class="jarvis-stat"><div class="jarvis-stat-label">Status</div><div class="jarvis-stat-value">${status.status_text}</div></div>` : '',
+  ].filter(Boolean).join('');
 
   el.innerHTML = `
     <div class="jarvis-meter">
-      <div class="context-bar-container">
-        <div class="context-bar-label">
-          <span>Context Window</span>
-          <span>${contextK}k / ${contextMaxK}k tokens</span>
+      ${contextUsed > 0 ? `
+        <div class="context-bar-container">
+          <div class="context-bar-label">
+            <span>Context Window</span>
+            <span>${contextK}k / ${contextMaxK}k tokens</span>
+          </div>
+          <div class="context-bar">
+            <div class="context-bar-fill ${barClass}" style="width: ${contextPct}%"></div>
+            <div class="context-bar-text">${contextPct}%</div>
+          </div>
         </div>
-        <div class="context-bar">
-          <div class="context-bar-fill ${barClass}" style="width: ${contextPct}%"></div>
-          <div class="context-bar-text">${contextPct}%</div>
-        </div>
-      </div>
-      <div class="jarvis-meter-row">
-        <div class="jarvis-stat">
-          <div class="jarvis-stat-label">Model</div>
-          <div class="jarvis-stat-value accent">${status.model || '—'}</div>
-        </div>
-        <div class="jarvis-stat">
-          <div class="jarvis-stat-label">Tokens In / Out</div>
-          <div class="jarvis-stat-value blue">${status.tokens_in || '—'} / ${status.tokens_out || '—'}</div>
-        </div>
-        <div class="jarvis-stat">
-          <div class="jarvis-stat-label">Cache</div>
-          <div class="jarvis-stat-value green">${status.cache_hit || '—'} hit · ${status.cache_cached || '—'} cached</div>
-        </div>
-        <div class="jarvis-stat">
-          <div class="jarvis-stat-label">Compactions</div>
-          <div class="jarvis-stat-value ${(status.compactions || 0) > 0 ? 'orange' : 'green'}">${status.compactions ?? '—'}</div>
-        </div>
-        <div class="jarvis-stat">
-          <div class="jarvis-stat-label">Session</div>
-          <div class="jarvis-stat-value" style="font-size:0.75rem">${status.session || '—'}</div>
-        </div>
-        <div class="jarvis-stat">
-          <div class="jarvis-stat-label">Thinking</div>
-          <div class="jarvis-stat-value">${status.thinking || 'off'}</div>
-        </div>
-      </div>
+      ` : ''}
+      ${statsHtml ? `<div class="jarvis-meter-row">${statsHtml}</div>` : ''}
       <div class="jarvis-updated">Last updated: ${status.updated_at ? timeAgo(status.updated_at) : 'never'}</div>
     </div>
   `;
@@ -429,19 +415,21 @@ function renderCalendar(events) {
 // --- Refresh ---
 
 async function refreshAll() {
-  const [stats, events, sessions, trello, calendar, jarvis] = await Promise.all([
+  const [stats, events, sessions, trello, calendar, jarvis, klaus] = await Promise.all([
     fetchJSON('/api/events/stats'),
     fetchJSON('/api/events?limit=50'),
     fetchJSON('/api/sessions/active'),
     fetchJSON('/api/trello'),
     fetchJSON('/api/calendar?days=7'),
-    fetchJSON('/api/jarvis/status')
+    fetchJSON('/api/agent/jarvis/status'),
+    fetchJSON('/api/agent/klaus/status')
   ]);
 
   renderStats(stats);
   renderFeed(events);
   renderSessions(sessions);
-  renderJarvisStatus(jarvis);
+  renderAgentStatus(jarvis, 'jarvis-status-content', 'jarvis-status-badge', 'Jarvis');
+  renderAgentStatus(klaus, 'klaus-status-content', 'klaus-status-badge', 'Klaus');
 
   if (trello && trello.boards) {
     boardsData = trello;
