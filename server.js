@@ -559,6 +559,153 @@ app.get('/api/agent/:name/activity', (req, res) => {
   }
 });
 
+// --- Agent Capabilities API ---
+
+const OPENCLAW_CONFIG_PATH = '/home/sasha/.openclaw/openclaw.json';
+const WORKSPACE_SKILLS_DIR = '/home/sasha/.openclaw/workspace/skills';
+const BUILTIN_SKILLS_DIR = '/home/sasha/.npm-global/lib/node_modules/openclaw/skills';
+
+const KEY_SERVICE_MAP = {
+  'TRELLO_API_KEY': 'Trello',
+  'TRELLO_TOKEN': 'Trello',
+  'GOG_ACCOUNT': 'Google Workspace',
+  'GOG_KEYRING_PASSWORD': 'Google Workspace',
+  'SCRAPECREATORS_API_KEY': 'ScrapeCreators',
+  'ANTHROPIC_API_KEY': 'Anthropic'
+};
+
+const PASSWORD_KEYS = new Set(['GOG_KEYRING_PASSWORD', 'ANTHROPIC_API_KEY']);
+
+function maskValue(key, value) {
+  if (!value) return '****';
+  if (PASSWORD_KEYS.has(key)) return '****';
+  if (value.length <= 8) return '****';
+  return value.slice(0, 4) + '...' + value.slice(-4);
+}
+
+function getSkillDescription(skillDir) {
+  try {
+    const skillMd = path.join(skillDir, 'SKILL.md');
+    if (!fs.existsSync(skillMd)) return null;
+    const content = fs.readFileSync(skillMd, 'utf-8');
+    const lines = content.split('\n').slice(0, 10);
+    for (const line of lines) {
+      const match = line.match(/^description:\s*['"]?(.+?)['"]?\s*$/);
+      if (match) {
+        let desc = match[1];
+        // Trim trailing quotes
+        if ((desc.startsWith("'") && desc.endsWith("'")) || (desc.startsWith('"') && desc.endsWith('"'))) {
+          desc = desc.slice(1, -1);
+        }
+        return desc.length > 100 ? desc.slice(0, 100) + '...' : desc;
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
+function scanSkills(dir, location) {
+  const skills = [];
+  try {
+    if (!fs.existsSync(dir)) return skills;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const desc = getSkillDescription(path.join(dir, entry.name));
+      if (desc) {
+        skills.push({ name: entry.name, description: desc, location });
+      } else {
+        skills.push({ name: entry.name, description: '', location });
+      }
+    }
+  } catch {}
+  return skills;
+}
+
+const AGENT_PERMISSIONS = {
+  jarvis: {
+    canSpawnSubagents: true,
+    canAccessFiles: true,
+    canExecuteCommands: true,
+    canManageCron: true,
+    canSendMessages: true
+  },
+  klaus: {
+    canSpawnSubagents: false,
+    canAccessFiles: true,
+    canExecuteCommands: true,
+    canManageCron: false,
+    canSendMessages: false
+  },
+  emily: {
+    canSpawnSubagents: false,
+    canAccessFiles: true,
+    canExecuteCommands: true,
+    canManageCron: false,
+    canSendMessages: false
+  }
+};
+
+const AGENT_SKILL_FOCUS = {
+  klaus: new Set(['coding-agent', 'github', 'gh-issues']),
+  emily: new Set(['gog', 'himalaya'])
+};
+
+app.get('/api/agent/:name/capabilities', (req, res) => {
+  try {
+    const name = req.params.name.toLowerCase();
+    const config = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG_PATH, 'utf8'));
+
+    // Find agent config
+    const agentList = config.agents?.list || [];
+    const agentConf = agentList.find(a => a.id === name || a.name?.toLowerCase() === name);
+    const defaults = config.agents?.defaults || {};
+
+    const model = agentConf?.model?.primary || defaults.model?.primary || 'unknown';
+    const toolsProfile = config.tools?.profile || 'default';
+    const agentType = (agentConf?.id === 'main' || agentConf?.default) ? 'main' : 'subagent';
+    const workspace = agentConf?.workspace || defaults.workspace || '';
+
+    // Permissions
+    const permissions = AGENT_PERMISSIONS[name] || AGENT_PERMISSIONS.jarvis;
+
+    // Skills
+    const workspaceSkills = scanSkills(WORKSPACE_SKILLS_DIR, 'workspace');
+    const builtinSkills = scanSkills(BUILTIN_SKILLS_DIR, 'builtin');
+    // Deduplicate: workspace overrides builtin
+    const workspaceNames = new Set(workspaceSkills.map(s => s.name));
+    const allSkills = [...workspaceSkills, ...builtinSkills.filter(s => !workspaceNames.has(s.name))];
+
+    // For subagents, filter to their focus skills
+    let skills = allSkills;
+    const focusSet = AGENT_SKILL_FOCUS[name];
+    if (focusSet) {
+      skills = allSkills.filter(s => focusSet.has(s.name));
+    }
+
+    // API Keys
+    const envVars = config.env || {};
+    const apiKeys = Object.entries(envVars).map(([key, value]) => ({
+      name: key,
+      masked: maskValue(key, value),
+      service: KEY_SERVICE_MAP[key] || 'Other'
+    }));
+
+    res.json({
+      model,
+      toolsProfile,
+      permissions,
+      skills,
+      allSkillCount: allSkills.length,
+      apiKeys,
+      agentType,
+      workspace
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Calendar ---
 
 app.get('/api/calendar', (req, res) => {

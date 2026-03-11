@@ -452,14 +452,48 @@ function renderCalendar(events) {
     return;
   }
 
+  const now = new Date();
+
   el.innerHTML = events.map(e => {
     const startDate = e.start?.dateTime || e.start?.date || e.start;
+    const endDate = e.end?.dateTime || e.end?.date || e.end;
     const isAllDay = e.allDay || (e.start?.date && !e.start?.dateTime);
+
+    // Determine event status
+    let statusClass = '';
+    let badgeHtml = '';
+    let titlePrefix = '';
+
+    const startTime = new Date(startDate);
+    const endTime = endDate ? new Date(endDate) : null;
+
+    if (isAllDay) {
+      // All-day events: compare by date only
+      const todayStr = now.toISOString().slice(0, 10);
+      const eventDateStr = typeof startDate === 'string' ? startDate.slice(0, 10) : startTime.toISOString().slice(0, 10);
+      if (eventDateStr < todayStr) {
+        statusClass = 'cal-event-done';
+        titlePrefix = '<span class="cal-check">✓</span> ';
+      } else if (eventDateStr === todayStr) {
+        statusClass = 'cal-event-active';
+        badgeHtml = ' <span class="cal-now-badge">NOW</span>';
+      }
+    } else if (endTime && endTime <= now) {
+      // Past event — ended already
+      statusClass = 'cal-event-done';
+      titlePrefix = '<span class="cal-check">✓</span> ';
+    } else if (startTime <= now && (!endTime || endTime > now)) {
+      // Currently happening
+      statusClass = 'cal-event-active';
+      badgeHtml = ' <span class="cal-now-badge">NOW</span>';
+    }
+    // else: upcoming — no extra class
+
     return `
-      <div class="cal-event">
-        <div class="cal-time">${isAllDay ? 'All day' : formatTime(startDate)}</div>
+      <div class="cal-event ${statusClass}">
+        <div class="cal-time">${isAllDay ? 'All day' : formatTime(startDate)}${badgeHtml}</div>
         <div>
-          <div class="cal-title">${formatDate(startDate)} — ${e.summary}</div>
+          <div class="cal-title">${titlePrefix}${formatDate(startDate)} — ${e.summary}</div>
           ${e.location ? `<div class="cal-location">📍 ${e.location}</div>` : ''}
         </div>
       </div>
@@ -1764,6 +1798,10 @@ async function renderAgentProfile(container, agentName) {
         </div>
       </div>
 
+      <div class="agent-profile-section" id="ap-capabilities-section">
+        <div class="loading"><div class="spinner"></div> Loading capabilities...</div>
+      </div>
+
       <div class="agent-profile-section">
         <div class="agent-profile-section-title">Recent Activity</div>
         <div class="agent-profile-activity" id="ap-activity">
@@ -1774,10 +1812,11 @@ async function renderAgentProfile(container, agentName) {
   `;
 
   // Fetch all data in parallel
-  const [status, files, activity] = await Promise.all([
+  const [status, files, activity, capabilities] = await Promise.all([
     fetchJSON(`/api/agent/${name}/status`),
     fetchJSON(`/api/agent/${name}/files`),
-    fetchJSON(`/api/agent/${name}/activity`)
+    fetchJSON(`/api/agent/${name}/activity`),
+    fetchJSON(`/api/agent/${name}/capabilities`)
   ]);
 
   if (!currentView.startsWith('agent/')) return;
@@ -1788,6 +1827,7 @@ async function renderAgentProfile(container, agentName) {
 
   renderAgentProfileStatus(status);
   renderAgentProfileFiles(files || [], meta.defaultFile);
+  renderAgentProfileCapabilities(capabilities);
   renderAgentProfileActivity(activity || []);
 }
 
@@ -1912,6 +1952,66 @@ async function selectAgentFile(filePath) {
       </div>
       <div class="ap-file-viewer-body markdown-body">${renderMarkdown(data.content)}</div>
     </div>
+  `;
+}
+
+function renderAgentProfileCapabilities(cap) {
+  const el = document.getElementById('ap-capabilities-section');
+  if (!el || !cap || cap.error) {
+    if (el) el.innerHTML = '';
+    return;
+  }
+
+  // Permissions grid
+  const permLabels = {
+    canSpawnSubagents: { label: 'Spawn Subagents', icon: '🔀' },
+    canAccessFiles: { label: 'File Access', icon: '📁' },
+    canExecuteCommands: { label: 'Execute Commands', icon: '⚙️' },
+    canManageCron: { label: 'Manage Cron', icon: '⏰' },
+    canSendMessages: { label: 'Send Messages', icon: '💬' }
+  };
+
+  const permHtml = Object.entries(cap.permissions || {}).map(([key, allowed]) => {
+    const meta = permLabels[key] || { label: key, icon: '•' };
+    return `<div class="cap-perm-badge ${allowed ? 'allowed' : 'denied'}">
+      <span class="cap-perm-icon">${allowed ? '✅' : '❌'}</span>
+      <span class="cap-perm-label">${meta.icon} ${meta.label}</span>
+    </div>`;
+  }).join('');
+
+  // Skills pills
+  const skillCount = cap.allSkillCount || cap.skills?.length || 0;
+  const skillsHtml = (cap.skills || []).map(s => {
+    const locBadge = s.location === 'workspace' ? 'skill-loc-workspace' : 'skill-loc-builtin';
+    const locLabel = s.location === 'workspace' ? 'user' : 'built-in';
+    return `<div class="cap-skill-pill" title="${escapeHtml(s.description)}">
+      <span class="cap-skill-name">${escapeHtml(s.name)}</span>
+      <span class="cap-skill-loc ${locBadge}">${locLabel}</span>
+    </div>`;
+  }).join('');
+
+  // API Keys table
+  const keysHtml = (cap.apiKeys || []).map(k => `
+    <div class="cap-key-row">
+      <span class="cap-key-status">●</span>
+      <span class="cap-key-service">${escapeHtml(k.service)}</span>
+      <span class="cap-key-name">${escapeHtml(k.name)}</span>
+      <span class="cap-key-masked">${escapeHtml(k.masked)}</span>
+    </div>
+  `).join('');
+
+  el.innerHTML = `
+    <div class="agent-profile-section-title">Permissions</div>
+    <div class="cap-perm-grid">${permHtml}</div>
+
+    <div class="agent-profile-section-title" style="margin-top:1.5rem">
+      Skills
+      <span class="cap-skill-count">${cap.skills?.length || 0}${skillCount > (cap.skills?.length || 0) ? ' / ' + skillCount + ' total' : ''}</span>
+    </div>
+    <div class="cap-skills-list">${skillsHtml || '<div class="empty-state">No skills configured</div>'}</div>
+
+    <div class="agent-profile-section-title" style="margin-top:1.5rem">API Keys</div>
+    <div class="cap-keys-table">${keysHtml || '<div class="empty-state">No API keys configured</div>'}</div>
   `;
 }
 

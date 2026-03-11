@@ -702,6 +702,58 @@ body {
   padding: 0.6rem 0; border-bottom: 1px solid rgba(58, 59, 66, 0.5);
 }
 .cal-event:last-child { border-bottom: none; }
+
+/* Event status variants */
+.cal-event-done {
+  opacity: 0.5;
+  border-left: 3px solid var(--green, #4ade80);
+  padding-left: 0.6rem;
+}
+.cal-event-done .cal-title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255,255,255,0.3);
+}
+.cal-check {
+  color: var(--green, #4ade80);
+  font-size: 0.75rem;
+  margin-right: 0.15rem;
+}
+.cal-event-active {
+  background: rgba(74, 222, 128, 0.08);
+  border-left: 3px solid var(--green, #4ade80);
+  padding-left: 0.6rem;
+  animation: cal-pulse-border 2s ease-in-out infinite;
+}
+@keyframes cal-pulse-border {
+  0%, 100% { border-left-color: var(--green, #4ade80); }
+  50% { border-left-color: rgba(74, 222, 128, 0.3); }
+}
+.cal-now-badge {
+  display: inline-block;
+  font-size: 0.6rem;
+  font-weight: 700;
+  background: var(--green, #4ade80);
+  color: #000;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+  letter-spacing: 0.03em;
+}
+.cal-event-missed {
+  opacity: 0.55;
+  border-left: 3px solid #f59e0b;
+  padding-left: 0.6rem;
+}
+.cal-event-missed::after {
+  content: 'missed?';
+  font-size: 0.6rem;
+  color: #f59e0b;
+  opacity: 0.7;
+  margin-left: auto;
+  padding-left: 0.5rem;
+}
+
 .cal-time {
   font-size: 0.8rem; font-family: var(--font-mono);
   color: var(--accent); min-width: 60px; font-weight: 500;
@@ -2596,4 +2648,167 @@ body {
   .docs-sidebar { width: 100%; min-width: 100%; max-height: 250px; border-right: none; border-bottom: 1px solid var(--border); }
   .log-entry { flex-wrap: wrap; }
   .log-entry-meta { width: 100%; margin-top: 0.25rem; }
+}
+
+/* ===== CAPABILITIES SECTION ===== */
+
+.cap-perm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.cap-perm-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.cap-perm-badge.allowed {
+  background: var(--green-dim);
+  color: var(--green);
+  border: 1px solid rgba(74, 222, 128, 0.2);
+}
+
+.cap-perm-badge.denied {
+  background: var(--red-dim);
+  color: var(--red);
+  border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
+.cap-perm-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.cap-perm-label {
+  white-space: nowrap;
+}
+
+/* Skills */
+
+.cap-skill-count {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 0.5rem;
+  background: var(--bg-card);
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+}
+
+.cap-skills-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.cap-skill-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+  cursor: default;
+  transition: border-color 0.15s;
+}
+
+.cap-skill-pill:hover {
+  border-color: var(--accent);
+}
+
+.cap-skill-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cap-skill-loc {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.skill-loc-workspace {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.skill-loc-builtin {
+  background: var(--blue-dim);
+  color: var(--blue);
+}
+
+/* API Keys */
+
+.cap-keys-table {
+  margin-top: 0.5rem;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.cap-key-row {
+  display: grid;
+  grid-template-columns: 20px 120px 1fr 140px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.cap-key-row:last-child {
+  border-bottom: none;
+}
+
+.cap-key-row:nth-child(even) {
+  background: var(--bg-secondary);
+}
+
+.cap-key-status {
+  color: var(--green);
+  font-size: 0.6rem;
+}
+
+.cap-key-service {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cap-key-name {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.cap-key-masked {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+@media (max-width: 768px) {
+  .cap-perm-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .cap-key-row {
+    grid-template-columns: 20px 1fr 1fr;
+  }
+  .cap-key-name {
+    display: none;
+  }
 }
