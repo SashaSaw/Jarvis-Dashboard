@@ -265,6 +265,87 @@ document.addEventListener('keydown', (e) => {
 
 // --- Other Sections ---
 
+function renderJarvisStatus(status) {
+  const el = document.getElementById('jarvis-status-content');
+  const badge = document.getElementById('jarvis-status-badge');
+
+  if (!status || status.error) {
+    el.innerHTML = '<div class="empty-state">Jarvis status not available</div>';
+    badge.textContent = 'Offline';
+    badge.style.background = 'var(--red-dim)';
+    badge.style.color = 'var(--red)';
+    return;
+  }
+
+  // Check if status is stale (>5 min)
+  const updatedAgo = status.updated_at ? (Date.now() - new Date(status.updated_at).getTime()) / 60000 : 999;
+  if (updatedAgo > 5) {
+    badge.textContent = 'Idle';
+    badge.style.background = 'var(--yellow-dim)';
+    badge.style.color = 'var(--yellow)';
+  } else {
+    badge.textContent = 'Online';
+    badge.style.background = 'var(--green-dim)';
+    badge.style.color = 'var(--green)';
+  }
+
+  const contextUsed = status.context_used || 0;
+  const contextMax = status.context_max || 200000;
+  const contextPct = Math.round((contextUsed / contextMax) * 100);
+  const contextK = Math.round(contextUsed / 1000);
+  const contextMaxK = Math.round(contextMax / 1000);
+
+  let barClass = '';
+  if (contextPct >= 80) barClass = 'danger';
+  else if (contextPct >= 60) barClass = 'warning';
+
+  let pctColor = 'accent';
+  if (contextPct >= 80) pctColor = 'red';
+  else if (contextPct >= 60) pctColor = 'orange';
+
+  el.innerHTML = `
+    <div class="jarvis-meter">
+      <div class="context-bar-container">
+        <div class="context-bar-label">
+          <span>Context Window</span>
+          <span>${contextK}k / ${contextMaxK}k tokens</span>
+        </div>
+        <div class="context-bar">
+          <div class="context-bar-fill ${barClass}" style="width: ${contextPct}%"></div>
+          <div class="context-bar-text">${contextPct}%</div>
+        </div>
+      </div>
+      <div class="jarvis-meter-row">
+        <div class="jarvis-stat">
+          <div class="jarvis-stat-label">Model</div>
+          <div class="jarvis-stat-value accent">${status.model || '—'}</div>
+        </div>
+        <div class="jarvis-stat">
+          <div class="jarvis-stat-label">Tokens In / Out</div>
+          <div class="jarvis-stat-value blue">${status.tokens_in || '—'} / ${status.tokens_out || '—'}</div>
+        </div>
+        <div class="jarvis-stat">
+          <div class="jarvis-stat-label">Cache</div>
+          <div class="jarvis-stat-value green">${status.cache_hit || '—'} hit · ${status.cache_cached || '—'} cached</div>
+        </div>
+        <div class="jarvis-stat">
+          <div class="jarvis-stat-label">Compactions</div>
+          <div class="jarvis-stat-value ${(status.compactions || 0) > 0 ? 'orange' : 'green'}">${status.compactions ?? '—'}</div>
+        </div>
+        <div class="jarvis-stat">
+          <div class="jarvis-stat-label">Session</div>
+          <div class="jarvis-stat-value" style="font-size:0.75rem">${status.session || '—'}</div>
+        </div>
+        <div class="jarvis-stat">
+          <div class="jarvis-stat-label">Thinking</div>
+          <div class="jarvis-stat-value">${status.thinking || 'off'}</div>
+        </div>
+      </div>
+      <div class="jarvis-updated">Last updated: ${status.updated_at ? timeAgo(status.updated_at) : 'never'}</div>
+    </div>
+  `;
+}
+
 function renderStats(stats) {
   if (!stats) return;
   document.getElementById('stat-tasks').textContent = stats.tasks_today || 0;
@@ -348,17 +429,19 @@ function renderCalendar(events) {
 // --- Refresh ---
 
 async function refreshAll() {
-  const [stats, events, sessions, trello, calendar] = await Promise.all([
+  const [stats, events, sessions, trello, calendar, jarvis] = await Promise.all([
     fetchJSON('/api/events/stats'),
     fetchJSON('/api/events?limit=50'),
     fetchJSON('/api/sessions/active'),
     fetchJSON('/api/trello'),
-    fetchJSON('/api/calendar?days=7')
+    fetchJSON('/api/calendar?days=7'),
+    fetchJSON('/api/jarvis/status')
   ]);
 
   renderStats(stats);
   renderFeed(events);
   renderSessions(sessions);
+  renderJarvisStatus(jarvis);
 
   if (trello && trello.boards) {
     boardsData = trello;

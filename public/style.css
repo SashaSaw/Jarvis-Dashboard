@@ -319,6 +319,109 @@ body {
 .label-pink { background: #f472b6; }
 .label-black { background: #6b7280; }
 
+/* ===== JARVIS STATUS ===== */
+.jarvis-status-card {
+  grid-column: 1 / -1;
+}
+
+.jarvis-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.jarvis-meter-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.jarvis-stat {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.jarvis-stat-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+}
+
+.jarvis-stat-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.jarvis-stat-value.accent { color: var(--accent); }
+.jarvis-stat-value.green { color: var(--green); }
+.jarvis-stat-value.blue { color: var(--blue); }
+.jarvis-stat-value.orange { color: var(--orange); }
+.jarvis-stat-value.red { color: var(--red); }
+
+.context-bar-container {
+  margin-top: 0.25rem;
+}
+
+.context-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin-bottom: 0.3rem;
+}
+
+.context-bar {
+  height: 20px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+.context-bar-fill {
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.5s ease;
+  background: linear-gradient(90deg, var(--accent), #9b8bfa);
+}
+
+.context-bar-fill.warning {
+  background: linear-gradient(90deg, var(--orange), #fbbf24);
+}
+
+.context-bar-fill.danger {
+  background: linear-gradient(90deg, var(--red), #fb923c);
+}
+
+.context-bar-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.jarvis-updated {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-align: right;
+  margin-top: 0.5rem;
+}
+
 /* ===== AGENT SESSIONS ===== */
 .session-card {
   background: var(--bg-primary);

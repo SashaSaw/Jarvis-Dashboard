@@ -123,6 +123,23 @@ app.delete('/api/trello/cards/:cardId', async (req, res) => {
   }
 });
 
+// --- Jarvis Status ---
+
+let jarvisStatus = null;
+
+app.post('/api/jarvis/status', (req, res) => {
+  try {
+    jarvisStatus = { ...req.body, updated_at: new Date().toISOString() };
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/jarvis/status', (req, res) => {
+  res.json(jarvisStatus || { error: 'No status yet' });
+});
+
 // --- Calendar ---
 
 app.get('/api/calendar', (req, res) => {
