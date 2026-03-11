@@ -10,98 +10,70 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>">
 </head>
 <body>
-  <header class="header">
-    <h1>🐶 Jarvis Dashboard</h1>
-    <div class="status"><span class="dot"></span>Last updated: <span id="last-update">--</span></div>
-  </header>
+  <div class="app-shell">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">🐶</span>
+        <span class="sidebar-title">Jarvis</span>
+      </div>
 
-  <div class="dashboard">
-    <!-- Stats Row -->
-    <div class="stats-row">
-      <div class="stat-card green">
-        <div class="stat-value" id="stat-tasks">-</div>
-        <div class="stat-label">Tasks Completed</div>
+      <!-- Agent Status Cards -->
+      <div class="sidebar-agents">
+        <div class="sidebar-agent" id="sidebar-agent-jarvis">
+          <span class="agent-dot" id="agent-dot-jarvis"></span>
+          <span class="agent-icon">🐶</span>
+          <div class="agent-info">
+            <span class="agent-name">Jarvis</span>
+            <span class="agent-status-text" id="agent-status-jarvis">Loading...</span>
+          </div>
+        </div>
+        <div class="sidebar-agent" id="sidebar-agent-klaus">
+          <span class="agent-dot" id="agent-dot-klaus"></span>
+          <span class="agent-icon">⚡</span>
+          <div class="agent-info">
+            <span class="agent-name">Klaus</span>
+            <span class="agent-status-text" id="agent-status-klaus">Loading...</span>
+          </div>
+        </div>
       </div>
-      <div class="stat-card blue">
-        <div class="stat-value" id="stat-tool-uses">-</div>
-        <div class="stat-label">Tool Uses Today</div>
-      </div>
-      <div class="stat-card accent">
-        <div class="stat-value" id="stat-sessions">-</div>
-        <div class="stat-label">Active Sessions</div>
-      </div>
-      <div class="stat-card orange">
-        <div class="stat-value" id="stat-events">-</div>
-        <div class="stat-label">Events Today</div>
-      </div>
-    </div>
 
-    <!-- Projects Board (full width) -->
-    <div class="card projects-full">
-      <div class="card-header">
-        <div class="project-tabs" id="project-tabs"></div>
-        <button class="btn-refresh" onclick="refreshProjects()" title="Refresh">↻</button>
-      </div>
-      <div id="board-container" class="board-container">
-        <div class="loading"><div class="spinner"></div> Loading projects...</div>
-      </div>
-    </div>
+      <div class="sidebar-divider"></div>
 
-    <!-- Agent Status Cards -->
-    <div class="card agent-status-card">
-      <div class="card-header">
-        <span class="card-title">🐶 Jarvis</span>
-        <span class="card-badge" id="jarvis-status-badge" style="background:var(--green-dim);color:var(--green)">Online</span>
-      </div>
-      <div id="jarvis-status-content">
-        <div class="empty-state">Waiting for status...</div>
-      </div>
-    </div>
+      <!-- Navigation -->
+      <nav class="sidebar-nav">
+        <a class="nav-link active" href="#overview" data-view="overview">
+          <span class="nav-icon">📊</span> Overview
+        </a>
+        <a class="nav-link" href="#inbox" data-view="inbox">
+          <span class="nav-icon">📥</span> Inbox
+        </a>
+        <a class="nav-link" href="#kanban" data-view="kanban">
+          <span class="nav-icon">📋</span> Kanban
+        </a>
+        <a class="nav-link" href="#projects" data-view="projects">
+          <span class="nav-icon">📁</span> Projects
+        </a>
+        <a class="nav-link" href="#docs" data-view="docs">
+          <span class="nav-icon">📝</span> Docs
+        </a>
+        <a class="nav-link" href="#log" data-view="log">
+          <span class="nav-icon">📜</span> Log
+        </a>
+      </nav>
 
-    <div class="card agent-status-card">
-      <div class="card-header">
-        <span class="card-title">⚡ Klaus</span>
-        <span class="card-badge" id="klaus-status-badge" style="background:var(--red-dim);color:var(--red)">Offline</span>
+      <div class="sidebar-footer">
+        <span class="sidebar-updated">Updated: <span id="last-update">--</span></span>
       </div>
-      <div id="klaus-status-content">
-        <div class="empty-state">No activity yet</div>
-      </div>
-    </div>
+    </aside>
 
-    <!-- Active Sessions -->
-    <div class="card" id="sessions-card">
-      <div class="card-header">
-        <span class="card-title">⚡ Active Agent Sessions</span>
-      </div>
-      <div id="sessions-content">
-        <div class="loading"><div class="spinner"></div> Loading...</div>
-      </div>
-    </div>
-
-    <!-- Schedule -->
-    <div class="card" id="calendar-card">
-      <div class="card-header">
-        <span class="card-title">📅 Upcoming Schedule</span>
-        <span class="card-badge" style="background:var(--blue-dim);color:var(--blue)">7 days</span>
-      </div>
-      <div id="calendar-content">
-        <div class="loading"><div class="spinner"></div> Loading...</div>
-      </div>
-    </div>
-
-    <!-- Activity Feed -->
-    <div class="card activity-feed">
-      <div class="card-header">
-        <span class="card-title">📡 Agent Activity Feed</span>
-        <span class="card-badge" style="background:var(--green-dim);color:var(--green)" id="feed-count">0 events</span>
-      </div>
-      <ul class="feed-list" id="activity-feed">
-        <li class="empty-state">No agent activity yet.</li>
-      </ul>
-    </div>
+    <!-- Main Content -->
+    <main class="main-content" id="main-content">
+      <div class="loading"><div class="spinner"></div> Loading...</div>
+    </main>
   </div>
 
-  <!-- Card Detail Modal -->
+  <!-- Card Detail Modal (Trello) -->
   <div class="modal-overlay" id="card-modal" onclick="closeModal(event)">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modal-header">
@@ -145,7 +117,7 @@
     </div>
   </div>
 
-  <!-- New Card Modal -->
+  <!-- New Card Modal (Trello) -->
   <div class="modal-overlay" id="new-card-modal" onclick="closeNewCardModal(event)">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modal-header">
@@ -165,6 +137,43 @@
       <div class="modal-actions">
         <button class="btn-move" onclick="submitNewCard()">Create Card</button>
         <button class="btn-archive" onclick="closeNewCardModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task Detail Modal -->
+  <div class="modal-overlay" id="task-modal" onclick="closeTaskModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="task-modal-title">Edit Task</h3>
+        <button class="modal-close" onclick="closeTaskModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label>Title</label>
+          <input type="text" id="task-modal-name" class="modal-input">
+        </div>
+        <div class="modal-field">
+          <label>Description</label>
+          <textarea id="task-modal-desc" class="modal-textarea" rows="3" placeholder="Add details..."></textarea>
+        </div>
+        <div class="modal-field">
+          <label>Priority</label>
+          <select id="task-modal-priority" class="modal-select">
+            <option value="low">🔘 Low</option>
+            <option value="normal" selected>🔵 Normal</option>
+            <option value="high">🟠 High</option>
+            <option value="urgent">🔴 Urgent</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label>Category</label>
+          <input type="text" id="task-modal-category" class="modal-input" placeholder="e.g. work, personal, project...">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="saveTaskModal()">Save</button>
+        <button class="btn-archive" onclick="closeTaskModal()">Cancel</button>
       </div>
     </div>
   </div>

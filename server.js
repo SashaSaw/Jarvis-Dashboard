@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const { insertEvent, getEvents, getStats, getActiveSessions } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -132,13 +132,28 @@ app.delete('/api/trello/cards/:cardId', async (req, res) => {
   }
 });
 
-// --- Jarvis Status ---
+// --- Agent Status (SQLite-persisted) ---
 
-let agentStatuses = {};
+function saveAgentStatus(name, body) {
+  const updatedAt = new Date().toISOString();
+  const statusData = { ...body, updated_at: updatedAt };
+  upsertAgentStatus.run({
+    agent_name: name,
+    data: JSON.stringify(statusData),
+    updated_at: updatedAt
+  });
+  return statusData;
+}
+
+function loadAgentStatus(name) {
+  const row = getAgentStatus.get({ agent_name: name });
+  if (!row) return { error: 'No status yet' };
+  try { return JSON.parse(row.data); } catch { return { error: 'Corrupt status data' }; }
+}
 
 app.post('/api/agent/:name/status', (req, res) => {
   try {
-    agentStatuses[req.params.name] = { ...req.body, updated_at: new Date().toISOString() };
+    saveAgentStatus(req.params.name, req.body);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -146,17 +161,106 @@ app.post('/api/agent/:name/status', (req, res) => {
 });
 
 app.get('/api/agent/:name/status', (req, res) => {
-  res.json(agentStatuses[req.params.name] || { error: 'No status yet' });
+  try {
+    res.json(loadAgentStatus(req.params.name));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Backwards compat
 app.post('/api/jarvis/status', (req, res) => {
-  agentStatuses.jarvis = { ...req.body, updated_at: new Date().toISOString() };
-  res.json({ ok: true });
+  try {
+    saveAgentStatus('jarvis', req.body);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/jarvis/status', (req, res) => {
-  res.json(agentStatuses.jarvis || { error: 'No status yet' });
+  try {
+    res.json(loadAgentStatus('jarvis'));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Tasks API ---
+
+app.post('/api/tasks', (req, res) => {
+  try {
+    const { title, description, status, priority, category } = req.body;
+    if (!title) return res.status(400).json({ error: 'title required' });
+    const result = insertTask.run({
+      title,
+      description: description || null,
+      status: status || 'inbox',
+      priority: priority || 'normal',
+      category: category || null
+    });
+    const task = getTaskById.get({ id: result.lastInsertRowid });
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tasks', (req, res) => {
+  try {
+    const { status, category, kanban } = req.query;
+    let tasks;
+    if (kanban === '1') {
+      tasks = getTasksByStatuses.all();
+    } else {
+      tasks = getTasks.all({
+        status: status || null,
+        category: category || null
+      });
+    }
+    res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/tasks/:id', (req, res) => {
+  try {
+    const { title, description, status, priority, category } = req.body;
+    updateTask.run({
+      id: parseInt(req.params.id),
+      title: title !== undefined ? title : null,
+      description: description !== undefined ? description : null,
+      status: status !== undefined ? status : null,
+      priority: priority !== undefined ? priority : null,
+      category: category !== undefined ? category : null
+    });
+    const task = getTaskById.get({ id: parseInt(req.params.id) });
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/tasks/:id', (req, res) => {
+  try {
+    deleteTask.run({ id: parseInt(req.params.id) });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/tasks/:id/move', (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!status) return res.status(400).json({ error: 'status required' });
+    moveTask.run({ id: parseInt(req.params.id), status });
+    const task = getTaskById.get({ id: parseInt(req.params.id) });
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- Calendar ---
