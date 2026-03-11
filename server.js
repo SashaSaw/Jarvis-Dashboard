@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { insertEvent, getEvents, getStats, getActiveSessions } = require('./db');
-const { getAllBoards, createCard, moveCard, archiveCard, updateCard } = require('./integrations/trello');
+const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
 const app = express();
@@ -109,6 +109,15 @@ app.put('/api/trello/cards/:cardId', async (req, res) => {
   try {
     const card = await updateCard(req.params.cardId, req.body);
     res.json(card);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/trello/boards/:boardId/labels', async (req, res) => {
+  try {
+    const labels = await getBoardLabels(req.params.boardId);
+    res.json(labels);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

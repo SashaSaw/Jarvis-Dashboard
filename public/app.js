@@ -6,6 +6,8 @@ let activeTab = 0;
 let currentCard = null;
 let currentBoardLists = null;
 let newCardListId = null;
+let boardLabelsCache = {}; // boardId -> labels array
+let editingDesc = false;
 
 // --- Helpers ---
 
@@ -157,30 +159,49 @@ async function refreshProjects() {
 
 // --- Card Modal ---
 
-function openCard(card) {
+async function openCard(card) {
   currentCard = card;
   currentBoardLists = boardsData.boards[activeTab].lists;
+  editingDesc = false;
 
   document.getElementById('modal-card-name').textContent = card.name;
+
+  // Description
   document.getElementById('modal-card-desc').textContent = card.desc || 'No description';
+  document.getElementById('modal-card-desc').style.display = '';
+  document.getElementById('modal-desc-edit').style.display = 'none';
+  document.getElementById('btn-edit-desc').textContent = '✏️ Edit';
 
-  // Populate list dropdown
+  // Populate list dropdown and find current list index
   const select = document.getElementById('modal-card-list');
-  select.innerHTML = currentBoardLists.map(l =>
-    `<option value="${l.id}" ${l.cards.some(c => c.id === card.id) ? 'selected' : ''}>${l.name}</option>`
-  ).join('');
+  let currentListIdx = 0;
+  select.innerHTML = currentBoardLists.map((l, i) => {
+    const isCurrent = l.cards.some(c => c.id === card.id);
+    if (isCurrent) currentListIdx = i;
+    return `<option value="${l.id}" ${isCurrent ? 'selected' : ''}>${l.name}</option>`;
+  }).join('');
 
-  // Labels
-  const labelsEl = document.getElementById('modal-card-labels');
+  // Arrow button states
+  document.getElementById('btn-move-left').disabled = (currentListIdx === 0);
+  document.getElementById('btn-move-right').disabled = (currentListIdx === currentBoardLists.length - 1);
+
+  // Labels - always show
   const labelsField = document.getElementById('modal-labels-field');
+  labelsField.style.display = '';
+
+  const labelsEl = document.getElementById('modal-card-labels');
   if (card.labels && card.labels.length > 0) {
-    labelsField.style.display = '';
     labelsEl.innerHTML = card.labels.map(l =>
       `<span style="display:inline-block;padding:0.15rem 0.5rem;border-radius:4px;font-size:0.75rem;margin-right:0.25rem;" class="${labelColorClass(l.color)}">${l.name || l.color}</span>`
     ).join('');
   } else {
-    labelsField.style.display = 'none';
+    labelsEl.innerHTML = '<span style="font-size:0.8rem;color:var(--text-muted)">No labels</span>';
   }
+
+  // Load and render label picker
+  const boardId = boardsData.boards[activeTab].id;
+  await loadBoardLabels(boardId);
+  renderLabelPicker(boardId);
 
   // Due
   const dueEl = document.getElementById('modal-card-due');
@@ -194,6 +215,133 @@ function openCard(card) {
   }
 
   document.getElementById('card-modal').classList.add('visible');
+}
+
+// --- Label Picker ---
+
+async function loadBoardLabels(boardId) {
+  if (boardLabelsCache[boardId]) return;
+  const labels = await fetchJSON(`/api/trello/boards/${boardId}/labels`);
+  if (labels && Array.isArray(labels)) {
+    boardLabelsCache[boardId] = labels.filter(l => l.color); // skip colorless labels
+  }
+}
+
+function renderLabelPicker(boardId) {
+  const picker = document.getElementById('modal-label-picker');
+  const labels = boardLabelsCache[boardId] || [];
+  if (labels.length === 0) { picker.innerHTML = ''; return; }
+
+  const activeIds = new Set((currentCard.labels || []).map(l => l.id));
+
+  picker.innerHTML = labels.map(l => {
+    const isActive = activeIds.has(l.id);
+    return `<div class="label-swatch ${labelColorClass(l.color)} ${isActive ? 'active' : ''}"
+                 title="${l.name || l.color}"
+                 onclick="toggleLabel('${l.id}', '${boardId}')"></div>`;
+  }).join('');
+}
+
+async function toggleLabel(labelId, boardId) {
+  if (!currentCard) return;
+  const activeIds = (currentCard.labels || []).map(l => l.id);
+  const isActive = activeIds.includes(labelId);
+  let newIds;
+
+  if (isActive) {
+    newIds = activeIds.filter(id => id !== labelId);
+  } else {
+    newIds = [...activeIds, labelId];
+  }
+
+  // Update via Trello API
+  await fetchJSON(`/api/trello/cards/${currentCard.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idLabels: newIds.join(',') })
+  });
+
+  // Update local card state from board labels cache
+  const allLabels = boardLabelsCache[boardId] || [];
+  currentCard.labels = allLabels.filter(l => newIds.includes(l.id)).map(l => ({ id: l.id, name: l.name, color: l.color }));
+
+  // Re-render labels display and picker
+  const labelsEl = document.getElementById('modal-card-labels');
+  if (currentCard.labels.length > 0) {
+    labelsEl.innerHTML = currentCard.labels.map(l =>
+      `<span style="display:inline-block;padding:0.15rem 0.5rem;border-radius:4px;font-size:0.75rem;margin-right:0.25rem;" class="${labelColorClass(l.color)}">${l.name || l.color}</span>`
+    ).join('');
+  } else {
+    labelsEl.innerHTML = '<span style="font-size:0.8rem;color:var(--text-muted)">No labels</span>';
+  }
+  renderLabelPicker(boardId);
+  refreshProjects();
+}
+
+// --- Move Left/Right ---
+
+async function moveCardLeft() {
+  if (!currentCard || !currentBoardLists) return;
+  const currentIdx = currentBoardLists.findIndex(l => l.cards.some(c => c.id === currentCard.id));
+  if (currentIdx <= 0) return;
+  const targetListId = currentBoardLists[currentIdx - 1].id;
+  await fetchJSON(`/api/trello/cards/${currentCard.id}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId: targetListId })
+  });
+  closeModal();
+  refreshProjects();
+}
+
+async function moveCardRight() {
+  if (!currentCard || !currentBoardLists) return;
+  const currentIdx = currentBoardLists.findIndex(l => l.cards.some(c => c.id === currentCard.id));
+  if (currentIdx < 0 || currentIdx >= currentBoardLists.length - 1) return;
+  const targetListId = currentBoardLists[currentIdx + 1].id;
+  await fetchJSON(`/api/trello/cards/${currentCard.id}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId: targetListId })
+  });
+  closeModal();
+  refreshProjects();
+}
+
+// --- Edit Description ---
+
+function toggleDescEdit() {
+  editingDesc = !editingDesc;
+  if (editingDesc) {
+    document.getElementById('modal-card-desc').style.display = 'none';
+    document.getElementById('modal-desc-edit').style.display = '';
+    document.getElementById('modal-desc-textarea').value = currentCard.desc || '';
+    document.getElementById('btn-edit-desc').textContent = '✏️ Editing';
+    setTimeout(() => document.getElementById('modal-desc-textarea').focus(), 50);
+  } else {
+    cancelDescEdit();
+  }
+}
+
+function cancelDescEdit() {
+  editingDesc = false;
+  document.getElementById('modal-card-desc').style.display = '';
+  document.getElementById('modal-desc-edit').style.display = 'none';
+  document.getElementById('btn-edit-desc').textContent = '✏️ Edit';
+}
+
+async function saveDesc() {
+  if (!currentCard) return;
+  const newDesc = document.getElementById('modal-desc-textarea').value;
+  await fetchJSON(`/api/trello/cards/${currentCard.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ desc: newDesc })
+  });
+  currentCard.desc = newDesc;
+  document.getElementById('modal-card-desc').textContent = newDesc || 'No description';
+  cancelDescEdit();
+  refreshProjects();
 }
 
 function closeModal(e) {

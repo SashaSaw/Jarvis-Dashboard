@@ -110,16 +110,28 @@
       </div>
       <div class="modal-body">
         <div class="modal-field">
-          <label>Description</label>
+          <label>Description <button class="btn-edit-desc" id="btn-edit-desc" onclick="toggleDescEdit()">✏️ Edit</button></label>
           <p id="modal-card-desc" class="modal-desc"></p>
+          <div id="modal-desc-edit" style="display:none;">
+            <textarea id="modal-desc-textarea" class="modal-textarea" rows="4"></textarea>
+            <div class="desc-edit-actions">
+              <button class="btn-save-desc" onclick="saveDesc()">Save</button>
+              <button class="btn-cancel-desc" onclick="cancelDescEdit()">Cancel</button>
+            </div>
+          </div>
         </div>
         <div class="modal-field">
           <label>List</label>
-          <select id="modal-card-list" class="modal-select"></select>
+          <div class="list-move-row">
+            <button class="btn-move-arrow" id="btn-move-left" onclick="moveCardLeft()" title="Move to previous list">◀</button>
+            <select id="modal-card-list" class="modal-select"></select>
+            <button class="btn-move-arrow" id="btn-move-right" onclick="moveCardRight()" title="Move to next list">▶</button>
+          </div>
         </div>
         <div class="modal-field" id="modal-labels-field">
           <label>Labels</label>
           <div id="modal-card-labels"></div>
+          <div id="modal-label-picker" class="label-picker"></div>
         </div>
         <div class="modal-field" id="modal-due-field">
           <label>Due</label>

@@ -70,7 +70,7 @@ async function getFullBoard(boardId, boardName) {
           desc: card.desc || '',
           due: card.due,
           pos: card.pos,
-          labels: (card.labels || []).map(l => ({ name: l.name, color: l.color })),
+          labels: (card.labels || []).map(l => ({ id: l.id, name: l.name, color: l.color })),
           lastActivity: card.dateLastActivity
         });
       }
@@ -123,4 +123,8 @@ async function updateCard(cardId, fields) {
   return trelloRequest('PUT', `/cards/${cardId}`, fields);
 }
 
-module.exports = { getAllBoards, getFullBoard, createCard, moveCard, archiveCard, updateCard, BOARDS };
+async function getBoardLabels(boardId) {
+  return trelloFetch(`${BASE}/boards/${boardId}/labels?key=${API_KEY}&token=${TOKEN}&fields=id,name,color`);
+}
+
+module.exports = { getAllBoards, getFullBoard, createCard, moveCard, archiveCard, updateCard, getBoardLabels, BOARDS };

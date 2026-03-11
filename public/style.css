@@ -620,6 +620,127 @@ body {
 }
 .btn-archive:hover { background: var(--red-dim); }
 
+/* ===== LIST MOVE ARROWS ===== */
+.list-move-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.list-move-row .modal-select { flex: 1; }
+
+.btn-move-arrow {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  padding: 0.45rem 0.65rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  line-height: 1;
+}
+
+.btn-move-arrow:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.btn-move-arrow:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ===== LABEL PICKER ===== */
+.label-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.label-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all 0.15s;
+  position: relative;
+}
+
+.label-swatch:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 8px rgba(255,255,255,0.15);
+}
+
+.label-swatch.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--bg-card), 0 0 0 4px rgba(255,255,255,0.4);
+}
+
+.label-swatch.active::after {
+  content: '✓';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+/* ===== DESCRIPTION EDIT ===== */
+.btn-edit-desc {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  margin-left: 0.5rem;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.btn-edit-desc:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.desc-edit-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.btn-save-desc, .btn-cancel-desc {
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  border: none;
+  font-size: 0.8rem;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.15s;
+}
+
+.btn-save-desc {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-save-desc:hover { opacity: 0.85; }
+
+.btn-cancel-desc {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.btn-cancel-desc:hover { background: var(--bg-primary); }
+
 /* Shared */
 .empty-state {
   color: var(--text-muted); font-size: 0.85rem;
