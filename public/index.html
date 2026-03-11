@@ -36,6 +36,14 @@
             <span class="agent-status-text" id="agent-status-klaus">Loading...</span>
           </div>
         </div>
+        <div class="sidebar-agent" id="sidebar-agent-emily">
+          <span class="agent-dot" id="agent-dot-emily"></span>
+          <span class="agent-icon">📧</span>
+          <div class="agent-info">
+            <span class="agent-name">Emily</span>
+            <span class="agent-status-text" id="agent-status-emily">Loading...</span>
+          </div>
+        </div>
       </div>
 
       <div class="sidebar-divider"></div>
@@ -44,6 +52,9 @@
       <nav class="sidebar-nav">
         <a class="nav-link active" href="#overview" data-view="overview">
           <span class="nav-icon">📊</span> Overview
+        </a>
+        <a class="nav-link" href="#schedule" data-view="schedule">
+          <span class="nav-icon">🗓️</span> Schedule
         </a>
         <a class="nav-link" href="#inbox" data-view="inbox">
           <span class="nav-icon">📥</span> Inbox
@@ -174,6 +185,55 @@
       <div class="modal-actions">
         <button class="btn-move" onclick="saveTaskModal()">Save</button>
         <button class="btn-archive" onclick="closeTaskModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Schedule Entry Modal -->
+  <div class="modal-overlay" id="schedule-modal" onclick="closeScheduleModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="schedule-modal-title">New Schedule Entry</h3>
+        <button class="modal-close" onclick="closeScheduleModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label>Title</label>
+          <input type="text" id="schedule-title" class="modal-input" placeholder="Event title..." autofocus>
+        </div>
+        <div class="modal-field">
+          <label>Date</label>
+          <input type="date" id="schedule-date" class="modal-input">
+        </div>
+        <div class="modal-field" style="display:flex;gap:0.75rem;">
+          <div style="flex:1">
+            <label>Start Time</label>
+            <input type="time" id="schedule-start" class="modal-input">
+          </div>
+          <div style="flex:1">
+            <label>End Time</label>
+            <input type="time" id="schedule-end" class="modal-input">
+          </div>
+        </div>
+        <div class="modal-field">
+          <label>Color</label>
+          <div class="schedule-color-picker" id="schedule-color-picker"></div>
+        </div>
+        <div class="modal-field">
+          <label>Description</label>
+          <textarea id="schedule-desc" class="modal-textarea" rows="2" placeholder="Optional description..."></textarea>
+        </div>
+        <div class="modal-field">
+          <label>Link to Task (optional)</label>
+          <select id="schedule-task-link" class="modal-select">
+            <option value="">— No task —</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" id="schedule-save-btn" onclick="saveScheduleEntry()">Save</button>
+        <button class="btn-archive" id="schedule-delete-btn" onclick="deleteScheduleEntry()" style="display:none">🗑 Delete</button>
+        <button class="btn-archive" onclick="closeScheduleModal()">Cancel</button>
       </div>
     </div>
   </div>

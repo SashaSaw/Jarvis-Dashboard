@@ -14,6 +14,23 @@ let expandedTaskId = null;
 let inboxPriority = 'normal';
 let editingTaskId = null;
 
+// Schedule/Calendar state
+let calViewMode = 'day'; // day, week, month
+let calSelectedDate = new Date();
+let editingScheduleId = null;
+const SCHEDULE_COLORS = [
+  { name: 'Purple', value: '#7c6bf0' },
+  { name: 'Blue', value: '#60a5fa' },
+  { name: 'Green', value: '#4ade80' },
+  { name: 'Orange', value: '#fb923c' },
+  { name: 'Red', value: '#f87171' },
+  { name: 'Yellow', value: '#fbbf24' },
+  { name: 'Pink', value: '#f472b6' },
+  { name: 'Teal', value: '#2dd4bf' }
+];
+let selectedScheduleColor = '#7c6bf0';
+let calCurrentTimeInterval = null;
+
 // ===== HELPERS =====
 
 function timeAgo(dateStr) {
@@ -118,6 +135,10 @@ function updateNav() {
     const v = link.dataset.view;
     link.classList.toggle('active', v === currentView);
   });
+  // Clear sidebar agent active states when navigating to non-agent pages
+  if (!currentView.startsWith('agent/')) {
+    document.querySelectorAll('.sidebar-agent').forEach(el => el.classList.remove('sidebar-agent-active'));
+  }
 }
 
 function route() {
@@ -125,8 +146,18 @@ function route() {
   updateNav();
   const main = document.getElementById('main-content');
 
+  // Handle agent profile routes like #agent/jarvis
+  if (currentView.startsWith('agent/')) {
+    const agentName = currentView.split('/')[1];
+    if (agentName) {
+      renderAgentProfile(main, agentName);
+      return;
+    }
+  }
+
   switch (currentView) {
     case 'overview': renderOverview(main); break;
+    case 'schedule': renderSchedule(main); break;
     case 'inbox': renderInbox(main); break;
     case 'kanban': renderKanban(main); break;
     case 'projects': renderProjects(main); break;
@@ -139,13 +170,20 @@ function route() {
 // ===== SIDEBAR AGENT STATUS =====
 
 async function refreshAgentSidebar() {
-  const [jarvis, klaus] = await Promise.all([
+  const [jarvis, klaus, emily] = await Promise.all([
     fetchJSON('/api/agent/jarvis/status'),
-    fetchJSON('/api/agent/klaus/status')
+    fetchJSON('/api/agent/klaus/status'),
+    fetchJSON('/api/agent/emily/status')
   ]);
   updateSidebarAgent('jarvis', jarvis);
   updateSidebarAgent('klaus', klaus);
+  updateSidebarAgent('emily', emily);
 }
+
+// Make sidebar agent cards clickable
+document.getElementById('sidebar-agent-jarvis')?.addEventListener('click', () => navigate('agent/jarvis'));
+document.getElementById('sidebar-agent-klaus')?.addEventListener('click', () => navigate('agent/klaus'));
+document.getElementById('sidebar-agent-emily')?.addEventListener('click', () => navigate('agent/emily'));
 
 function updateSidebarAgent(name, status) {
   const dot = document.getElementById(`agent-dot-${name}`);
@@ -168,7 +206,7 @@ function updateSidebarAgent(name, status) {
   }
 }
 
-// ===== VIEW: OVERVIEW =====
+// ===== VIEW: OVERVIEW (Original Dashboard) =====
 
 async function renderOverview(container) {
   container.innerHTML = `
@@ -213,6 +251,16 @@ async function renderOverview(container) {
           </div>
         </div>
 
+        <div class="card agent-status-card">
+          <div class="card-header">
+            <span class="card-title">📧 Emily</span>
+            <span class="card-badge" id="emily-status-badge" style="background:var(--red-dim);color:var(--red)">Offline</span>
+          </div>
+          <div id="emily-status-content">
+            <div class="empty-state">No activity yet</div>
+          </div>
+        </div>
+
         <div class="card" id="sessions-card">
           <div class="card-header">
             <span class="card-title">⚡ Active Agent Sessions</span>
@@ -250,22 +298,24 @@ async function renderOverview(container) {
 async function refreshOverviewData() {
   if (currentView !== 'overview') return;
 
-  const [stats, events, sessions, calendar, jarvis, klaus] = await Promise.all([
+  const [stats, events, sessions, calendar, jarvis, klaus, emily] = await Promise.all([
     fetchJSON('/api/events/stats'),
     fetchJSON('/api/events?limit=50'),
     fetchJSON('/api/sessions/active'),
     fetchJSON('/api/calendar?days=7'),
     fetchJSON('/api/agent/jarvis/status'),
-    fetchJSON('/api/agent/klaus/status')
+    fetchJSON('/api/agent/klaus/status'),
+    fetchJSON('/api/agent/emily/status')
   ]);
 
-  if (currentView !== 'overview') return; // view changed during fetch
+  if (currentView !== 'overview') return;
 
   renderStats(stats);
   renderFeed(events);
   renderSessions(sessions);
   renderAgentStatus(jarvis, 'jarvis-status-content', 'jarvis-status-badge', 'Jarvis');
   renderAgentStatus(klaus, 'klaus-status-content', 'klaus-status-badge', 'Klaus');
+  renderAgentStatus(emily, 'emily-status-content', 'emily-status-badge', 'Emily');
   renderCalendar(calendar);
 }
 
@@ -415,6 +465,635 @@ function renderCalendar(events) {
       </div>
     `;
   }).join('');
+}
+
+// ===== VIEW: SCHEDULE (Calendar/Schedule) =====
+
+// Calendar date helpers
+function calDateStr(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function calWeekStart(d) {
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday start
+  return new Date(d.getFullYear(), d.getMonth(), diff);
+}
+
+function calWeekEnd(d) {
+  const start = calWeekStart(d);
+  return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+}
+
+function calMonthStart(d) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function calMonthEnd(d) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+}
+
+function calFormatHeader(d) {
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function calFormatWeekHeader(d) {
+  const start = calWeekStart(d);
+  const end = calWeekEnd(d);
+  const fmt = { day: 'numeric', month: 'short' };
+  return `${start.toLocaleDateString('en-GB', fmt)} — ${end.toLocaleDateString('en-GB', fmt)}, ${end.getFullYear()}`;
+}
+
+function calFormatMonthHeader(d) {
+  return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+}
+
+function timeToMinutes(t) {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minutesToPx(mins, hourHeight) {
+  return (mins / 60) * hourHeight;
+}
+
+const CAL_START_HOUR = 6;
+const CAL_END_HOUR = 23;
+const CAL_HOUR_HEIGHT = 60;
+
+async function renderSchedule(container) {
+  // Clear previous time indicator interval
+  if (calCurrentTimeInterval) { clearInterval(calCurrentTimeInterval); calCurrentTimeInterval = null; }
+
+  container.innerHTML = `
+    <div class="view-container">
+      <div class="view-header">
+        <h2 class="view-title">🗓️ Schedule</h2>
+      </div>
+
+      <!-- Calendar Controls -->
+      <div class="cal-controls">
+        <div class="cal-nav">
+          <button class="cal-nav-btn" onclick="calNavigate(-1)" title="Previous">◀</button>
+          <button class="cal-today-btn" onclick="calGoToday()">Today</button>
+          <button class="cal-nav-btn" onclick="calNavigate(1)" title="Next">▶</button>
+          <span class="cal-header-text" id="cal-header-text"></span>
+        </div>
+        <div class="cal-view-toggle">
+          <button class="cal-view-btn ${calViewMode === 'day' ? 'active' : ''}" onclick="calSwitchView('day')">Day</button>
+          <button class="cal-view-btn ${calViewMode === 'week' ? 'active' : ''}" onclick="calSwitchView('week')">Week</button>
+          <button class="cal-view-btn ${calViewMode === 'month' ? 'active' : ''}" onclick="calSwitchView('month')">Month</button>
+        </div>
+      </div>
+
+      <!-- Calendar Container -->
+      <div class="cal-container" id="cal-container">
+        <div class="loading"><div class="spinner"></div> Loading schedule...</div>
+      </div>
+
+      <!-- Today's Agenda -->
+      <div class="card" style="margin-top:1.25rem">
+        <div class="card-header">
+          <span class="card-title">📋 Today's Agenda</span>
+        </div>
+        <div id="agenda-content">
+          <div class="loading"><div class="spinner"></div> Loading...</div>
+        </div>
+      </div>
+    </div>
+  `;
+  refreshScheduleData();
+}
+
+async function refreshScheduleData() {
+  if (currentView !== 'schedule') return;
+
+  // Determine date range for current view
+  let from, to;
+  if (calViewMode === 'day') {
+    from = to = calDateStr(calSelectedDate);
+  } else if (calViewMode === 'week') {
+    from = calDateStr(calWeekStart(calSelectedDate));
+    to = calDateStr(calWeekEnd(calSelectedDate));
+  } else {
+    // Month: include padding days
+    const ms = calMonthStart(calSelectedDate);
+    const me = calMonthEnd(calSelectedDate);
+    const startDay = ms.getDay();
+    const padBefore = startDay === 0 ? 6 : startDay - 1;
+    from = calDateStr(new Date(ms.getFullYear(), ms.getMonth(), ms.getDate() - padBefore));
+    to = calDateStr(new Date(me.getFullYear(), me.getMonth(), me.getDate() + (42 - padBefore - me.getDate())));
+  }
+
+  const todayStr = calDateStr(new Date());
+
+  // Calculate calendar days needed from today
+  const calDays = calViewMode === 'month' ? 45 : calViewMode === 'week' ? 14 : 7;
+  const [schedule, todaySchedule, calendar] = await Promise.all([
+    fetchJSON(`/api/schedule?from=${from}&to=${to}`),
+    fetchJSON(`/api/schedule?date=${todayStr}`),
+    fetchJSON(`/api/calendar?days=${calDays}`)
+  ]);
+
+  if (currentView !== 'schedule') return;
+
+  // Convert Google Calendar events to schedule-like blocks
+  const calendarBlocks = (calendar || []).map(e => {
+    const startRaw = e.start?.dateTime || e.start?.date || e.start;
+    const endRaw = e.end?.dateTime || e.end?.date || e.end;
+    if (!startRaw) return null;
+    const isAllDay = e.allDay || (e.start?.date && !e.start?.dateTime);
+    const startDt = new Date(startRaw);
+    const endDt = endRaw ? new Date(endRaw) : new Date(startDt.getTime() + 3600000);
+    // Convert to London time
+    const startLondon = new Date(startDt.toLocaleString('en-US', { timeZone: 'Europe/London' }));
+    const endLondon = new Date(endDt.toLocaleString('en-US', { timeZone: 'Europe/London' }));
+    const dateStr = startRaw.slice(0, 10);
+    const startTime = isAllDay ? '06:00' : String(startLondon.getHours()).padStart(2, '0') + ':' + String(startLondon.getMinutes()).padStart(2, '0');
+    const endTime = isAllDay ? '23:00' : String(endLondon.getHours()).padStart(2, '0') + ':' + String(endLondon.getMinutes()).padStart(2, '0');
+    return {
+      date: dateStr,
+      start_time: startTime,
+      end_time: endTime,
+      title: e.summary || 'Calendar Event',
+      color: '#22d3ee',
+      description: e.location ? '📍 ' + e.location : '',
+      isGoogleCal: true,
+      isAllDay
+    };
+  }).filter(Boolean);
+
+  // Header text
+  const headerEl = document.getElementById('cal-header-text');
+  if (headerEl) {
+    if (calViewMode === 'day') headerEl.textContent = calFormatHeader(calSelectedDate);
+    else if (calViewMode === 'week') headerEl.textContent = calFormatWeekHeader(calSelectedDate);
+    else headerEl.textContent = calFormatMonthHeader(calSelectedDate);
+  }
+
+  // Render the appropriate view
+  const calContainer = document.getElementById('cal-container');
+  if (!calContainer) return;
+
+  if (calViewMode === 'day') renderDayView(calContainer, schedule || [], calendarBlocks);
+  else if (calViewMode === 'week') renderWeekView(calContainer, schedule || [], calendarBlocks);
+  else renderMonthView(calContainer, schedule || [], calendarBlocks);
+
+  // Agenda
+  renderAgenda(todaySchedule, calendar);
+}
+
+// ===== DAY VIEW =====
+
+function renderDayView(container, entries, calendarBlocks) {
+  const totalHours = CAL_END_HOUR - CAL_START_HOUR;
+  const gridHeight = totalHours * CAL_HOUR_HEIGHT;
+
+  let hoursHtml = '';
+  for (let h = CAL_START_HOUR; h <= CAL_END_HOUR; h++) {
+    const top = (h - CAL_START_HOUR) * CAL_HOUR_HEIGHT;
+    const label = String(h).padStart(2, '0') + ':00';
+    hoursHtml += `<div class="cal-hour-label" style="top:${top}px">${label}</div>`;
+    hoursHtml += `<div class="cal-hour-line" style="top:${top}px"></div>`;
+  }
+
+  // Render time blocks
+  const dateStr = calDateStr(calSelectedDate);
+  const todayEntries = entries.filter(e => e.date === dateStr);
+  const todayCalBlocks = (calendarBlocks || []).filter(e => e.date === dateStr);
+  const blocksHtml = renderTimeBlocks(todayEntries, false) + renderGoogleCalBlocks(todayCalBlocks, false);
+
+  container.innerHTML = `
+    <div class="cal-day-view">
+      <div class="cal-time-grid" style="height:${gridHeight}px" onclick="calGridClick(event, '${dateStr}')">
+        ${hoursHtml}
+        <div class="cal-blocks-area">
+          ${blocksHtml}
+        </div>
+        <div class="cal-now-line" id="cal-now-line"></div>
+      </div>
+    </div>
+  `;
+  updateNowLine();
+  startNowLineUpdater();
+  scrollToCurrentTime();
+}
+
+// ===== WEEK VIEW =====
+
+function renderWeekView(container, entries, calendarBlocks) {
+  const start = calWeekStart(calSelectedDate);
+  const totalHours = CAL_END_HOUR - CAL_START_HOUR;
+  const gridHeight = totalHours * CAL_HOUR_HEIGHT;
+  const todayStr = calDateStr(new Date());
+
+  // Day headers
+  let headersHtml = '<div class="cal-week-time-col"></div>';
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+    const ds = calDateStr(d);
+    days.push(ds);
+    const dayName = d.toLocaleDateString('en-GB', { weekday: 'short' });
+    const dayNum = d.getDate();
+    const isToday = ds === todayStr;
+    headersHtml += `<div class="cal-week-day-header ${isToday ? 'today' : ''}">
+      <span class="cal-week-day-name">${dayName}</span>
+      <span class="cal-week-day-num ${isToday ? 'today' : ''}">${dayNum}</span>
+    </div>`;
+  }
+
+  // Hour labels
+  let hoursHtml = '';
+  for (let h = CAL_START_HOUR; h <= CAL_END_HOUR; h++) {
+    const top = (h - CAL_START_HOUR) * CAL_HOUR_HEIGHT;
+    const label = String(h).padStart(2, '0') + ':00';
+    hoursHtml += `<div class="cal-hour-label" style="top:${top}px">${label}</div>`;
+  }
+
+  // Columns
+  let columnsHtml = '';
+  for (let i = 0; i < 7; i++) {
+    const ds = days[i];
+    const isToday = ds === todayStr;
+    const dayEntries = entries.filter(e => e.date === ds);
+    const dayCalBlocks = (calendarBlocks || []).filter(e => e.date === ds);
+    const blocks = renderTimeBlocks(dayEntries, true) + renderGoogleCalBlocks(dayCalBlocks, true);
+
+    let gridLines = '';
+    for (let h = CAL_START_HOUR; h <= CAL_END_HOUR; h++) {
+      const top = (h - CAL_START_HOUR) * CAL_HOUR_HEIGHT;
+      gridLines += `<div class="cal-hour-line" style="top:${top}px"></div>`;
+    }
+
+    columnsHtml += `<div class="cal-week-col ${isToday ? 'today' : ''}" onclick="calGridClick(event, '${ds}')" style="height:${gridHeight}px">
+      ${gridLines}
+      <div class="cal-blocks-area">${blocks}</div>
+      ${isToday ? '<div class="cal-now-line" id="cal-now-line"></div>' : ''}
+    </div>`;
+  }
+
+  container.innerHTML = `
+    <div class="cal-week-view">
+      <div class="cal-week-header">${headersHtml}</div>
+      <div class="cal-week-body">
+        <div class="cal-week-time-col" style="height:${gridHeight}px">${hoursHtml}</div>
+        <div class="cal-week-columns">${columnsHtml}</div>
+      </div>
+    </div>
+  `;
+  updateNowLine();
+  startNowLineUpdater();
+  scrollToCurrentTime();
+}
+
+// ===== MONTH VIEW =====
+
+function renderMonthView(container, entries, calendarBlocks) {
+  const todayStr = calDateStr(new Date());
+  const ms = calMonthStart(calSelectedDate);
+  const me = calMonthEnd(calSelectedDate);
+  const startDay = ms.getDay();
+  const padBefore = startDay === 0 ? 6 : startDay - 1;
+  const firstCell = new Date(ms.getFullYear(), ms.getMonth(), ms.getDate() - padBefore);
+
+  // Group entries by date
+  const byDate = {};
+  (entries || []).forEach(e => {
+    if (!byDate[e.date]) byDate[e.date] = [];
+    byDate[e.date].push(e);
+  });
+  // Add Google Calendar events to month view grouping
+  (calendarBlocks || []).forEach(e => {
+    if (!byDate[e.date]) byDate[e.date] = [];
+    byDate[e.date].push(e);
+  });
+
+  let headerHtml = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    .map(d => `<div class="cal-month-header-cell">${d}</div>`).join('');
+
+  let cellsHtml = '';
+  const totalCells = 42;
+  for (let i = 0; i < totalCells; i++) {
+    const cellDate = new Date(firstCell.getFullYear(), firstCell.getMonth(), firstCell.getDate() + i);
+    const ds = calDateStr(cellDate);
+    const isToday = ds === todayStr;
+    const isCurrentMonth = cellDate.getMonth() === calSelectedDate.getMonth();
+    const dayEntries = byDate[ds] || [];
+
+    const dots = dayEntries.slice(0, 3).map(e =>
+      `<div class="cal-month-dot" style="background:${e.color}" title="${escapeHtml(e.title)}"></div>`
+    ).join('');
+    const more = dayEntries.length > 3 ? `<span class="cal-month-more">+${dayEntries.length - 3}</span>` : '';
+
+    cellsHtml += `<div class="cal-month-cell ${isToday ? 'today' : ''} ${!isCurrentMonth ? 'other-month' : ''}" onclick="calMonthDayClick('${ds}')">
+      <span class="cal-month-day-num ${isToday ? 'today' : ''}">${cellDate.getDate()}</span>
+      <div class="cal-month-dots">${dots}${more}</div>
+    </div>`;
+  }
+
+  container.innerHTML = `
+    <div class="cal-month-view">
+      <div class="cal-month-header-row">${headerHtml}</div>
+      <div class="cal-month-grid">${cellsHtml}</div>
+    </div>
+  `;
+}
+
+// ===== TIME BLOCKS RENDERING =====
+
+function renderTimeBlocks(entries, compact) {
+  return entries.map(e => {
+    const startMins = timeToMinutes(e.start_time) - CAL_START_HOUR * 60;
+    const endMins = timeToMinutes(e.end_time) - CAL_START_HOUR * 60;
+    const top = minutesToPx(Math.max(startMins, 0), CAL_HOUR_HEIGHT);
+    const height = Math.max(minutesToPx(endMins - Math.max(startMins, 0), CAL_HOUR_HEIGHT), 20);
+
+    return `<div class="cal-block" style="top:${top}px;height:${height}px;background:${e.color}33;border-left:3px solid ${e.color}"
+      onclick="event.stopPropagation();openScheduleEdit(${e.id})"
+      title="${escapeHtml(e.title)}\n${e.start_time} – ${e.end_time}${e.description ? '\n' + e.description : ''}">
+      <div class="cal-block-title">${escapeHtml(e.title)}</div>
+      <div class="cal-block-time">${e.start_time} – ${e.end_time}</div>
+      ${!compact && e.description ? `<div class="cal-block-desc">${escapeHtml(e.description)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ===== GOOGLE CALENDAR BLOCKS =====
+
+function renderGoogleCalBlocks(events, compact) {
+  return (events || []).map(e => {
+    const startMins = timeToMinutes(e.start_time) - CAL_START_HOUR * 60;
+    const endMins = timeToMinutes(e.end_time) - CAL_START_HOUR * 60;
+    const top = minutesToPx(Math.max(startMins, 0), CAL_HOUR_HEIGHT);
+    const height = Math.max(minutesToPx(endMins - Math.max(startMins, 0), CAL_HOUR_HEIGHT), 20);
+    const color = '#22d3ee';
+
+    return `<div class="cal-block cal-block-gcal" style="top:${top}px;height:${height}px;background:${color}22;border-left:3px solid ${color}"
+      title="${escapeHtml(e.title)}\n${e.start_time} – ${e.end_time}${e.description ? '\n' + e.description : ''}">
+      <div class="cal-block-title">${escapeHtml(e.title)}</div>
+      <div class="cal-block-time">${e.start_time} – ${e.end_time}</div>
+      ${!compact && e.description ? `<div class="cal-block-desc">${escapeHtml(e.description)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ===== NOW LINE =====
+
+function updateNowLine() {
+  const line = document.getElementById('cal-now-line');
+  if (!line) return;
+
+  const now = new Date();
+  // Use London time
+  const londonTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/London' }));
+  const h = londonTime.getHours();
+  const m = londonTime.getMinutes();
+
+  if (h < CAL_START_HOUR || h >= CAL_END_HOUR) {
+    line.style.display = 'none';
+    return;
+  }
+
+  const top = ((h - CAL_START_HOUR) * 60 + m) / 60 * CAL_HOUR_HEIGHT;
+  line.style.display = '';
+  line.style.top = top + 'px';
+}
+
+function startNowLineUpdater() {
+  if (calCurrentTimeInterval) clearInterval(calCurrentTimeInterval);
+  calCurrentTimeInterval = setInterval(updateNowLine, 60000);
+}
+
+function scrollToCurrentTime() {
+  setTimeout(() => {
+    const line = document.getElementById('cal-now-line');
+    if (line && line.style.display !== 'none') {
+      line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, 100);
+}
+
+// ===== CALENDAR NAVIGATION =====
+
+function calNavigate(dir) {
+  if (calViewMode === 'day') {
+    calSelectedDate = new Date(calSelectedDate.getFullYear(), calSelectedDate.getMonth(), calSelectedDate.getDate() + dir);
+  } else if (calViewMode === 'week') {
+    calSelectedDate = new Date(calSelectedDate.getFullYear(), calSelectedDate.getMonth(), calSelectedDate.getDate() + (7 * dir));
+  } else {
+    calSelectedDate = new Date(calSelectedDate.getFullYear(), calSelectedDate.getMonth() + dir, 1);
+  }
+  refreshScheduleData();
+}
+
+function calGoToday() {
+  calSelectedDate = new Date();
+  refreshScheduleData();
+}
+
+function calSwitchView(mode) {
+  calViewMode = mode;
+  // Update toggle buttons
+  document.querySelectorAll('.cal-view-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.cal-view-btn[onclick*="'${mode}'"]`)?.classList.add('active');
+  refreshScheduleData();
+}
+
+function calMonthDayClick(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  calSelectedDate = new Date(y, m - 1, d);
+  calViewMode = 'day';
+  renderSchedule(document.getElementById('main-content'));
+}
+
+function calGridClick(event, dateStr) {
+  // Calculate time from click position
+  const rect = event.currentTarget.getBoundingClientRect();
+  const y = event.clientY - rect.top + event.currentTarget.scrollTop;
+  const totalMinutes = (y / CAL_HOUR_HEIGHT) * 60 + CAL_START_HOUR * 60;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = Math.round((totalMinutes % 60) / 15) * 15;
+  const startTime = String(hours).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
+  const endHour = minutes + 60 >= 60 ? hours + 1 : hours;
+  const endMin = (minutes + 60) % 60;
+  const endTime = String(Math.min(endHour, CAL_END_HOUR)).padStart(2, '0') + ':' + String(endMin).padStart(2, '0');
+
+  openScheduleNew(dateStr, startTime, endTime);
+}
+
+// ===== AGENDA =====
+
+function renderAgenda(todaySchedule, calendarEvents) {
+  const el = document.getElementById('agenda-content');
+  if (!el) return;
+
+  const items = [];
+
+  // Schedule entries
+  if (todaySchedule) {
+    todaySchedule.forEach(e => {
+      items.push({
+        time: e.start_time,
+        endTime: e.end_time,
+        title: e.title,
+        color: e.color,
+        source: 'schedule',
+        description: e.description
+      });
+    });
+  }
+
+  // Google Calendar events (today only)
+  if (calendarEvents) {
+    const todayStr = calDateStr(new Date());
+    calendarEvents.forEach(e => {
+      const startDate = e.start?.dateTime || e.start?.date || e.start;
+      if (!startDate) return;
+      const eventDate = startDate.slice(0, 10);
+      if (eventDate !== todayStr && !e.allDay) return;
+      const isAllDay = e.allDay || (e.start?.date && !e.start?.dateTime);
+      items.push({
+        time: isAllDay ? '00:00' : new Date(startDate).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' }),
+        title: e.summary,
+        color: '#60a5fa',
+        source: 'google',
+        location: e.location,
+        isAllDay
+      });
+    });
+  }
+
+  items.sort((a, b) => a.time.localeCompare(b.time));
+
+  if (items.length === 0) {
+    el.innerHTML = '<div class="empty-state">No events scheduled for today</div>';
+    return;
+  }
+
+  el.innerHTML = items.map(item => `
+    <div class="agenda-item">
+      <div class="agenda-color-dot" style="background:${item.color}"></div>
+      <div class="agenda-time">${item.isAllDay ? 'All day' : item.time}${item.endTime ? ' – ' + item.endTime : ''}</div>
+      <div class="agenda-info">
+        <div class="agenda-title">${escapeHtml(item.title)}</div>
+        ${item.description ? `<div class="agenda-desc">${escapeHtml(item.description)}</div>` : ''}
+        ${item.location ? `<div class="agenda-desc">📍 ${escapeHtml(item.location)}</div>` : ''}
+      </div>
+      <span class="agenda-source ${item.source}">${item.source === 'google' ? '📅 Google' : '🗓 Local'}</span>
+    </div>
+  `).join('');
+}
+
+// ===== SCHEDULE MODAL =====
+
+async function openScheduleNew(dateStr, startTime, endTime) {
+  editingScheduleId = null;
+  document.getElementById('schedule-modal-title').textContent = 'New Schedule Entry';
+  document.getElementById('schedule-title').value = '';
+  document.getElementById('schedule-date').value = dateStr || calDateStr(calSelectedDate);
+  document.getElementById('schedule-start').value = startTime || '09:00';
+  document.getElementById('schedule-end').value = endTime || '10:00';
+  document.getElementById('schedule-desc').value = '';
+  document.getElementById('schedule-delete-btn').style.display = 'none';
+  selectedScheduleColor = '#7c6bf0';
+  renderScheduleColorPicker();
+  await loadTaskOptions();
+  document.getElementById('schedule-task-link').value = '';
+  document.getElementById('schedule-modal').classList.add('visible');
+  setTimeout(() => document.getElementById('schedule-title').focus(), 100);
+}
+
+async function openScheduleEdit(id) {
+  const entries = await fetchJSON(`/api/schedule?from=2000-01-01&to=2099-12-31`);
+  const entry = entries?.find(e => e.id === id);
+  if (!entry) return;
+
+  editingScheduleId = id;
+  document.getElementById('schedule-modal-title').textContent = 'Edit Schedule Entry';
+  document.getElementById('schedule-title').value = entry.title;
+  document.getElementById('schedule-date').value = entry.date;
+  document.getElementById('schedule-start').value = entry.start_time;
+  document.getElementById('schedule-end').value = entry.end_time;
+  document.getElementById('schedule-desc').value = entry.description || '';
+  document.getElementById('schedule-delete-btn').style.display = '';
+  selectedScheduleColor = entry.color || '#7c6bf0';
+  renderScheduleColorPicker();
+  await loadTaskOptions();
+  document.getElementById('schedule-task-link').value = entry.task_id || '';
+  document.getElementById('schedule-modal').classList.add('visible');
+}
+
+function renderScheduleColorPicker() {
+  const picker = document.getElementById('schedule-color-picker');
+  if (!picker) return;
+  picker.innerHTML = SCHEDULE_COLORS.map(c =>
+    `<div class="sched-color-swatch ${selectedScheduleColor === c.value ? 'active' : ''}"
+          style="background:${c.value}" title="${c.name}"
+          onclick="selectScheduleColor('${c.value}')"></div>`
+  ).join('');
+}
+
+function selectScheduleColor(color) {
+  selectedScheduleColor = color;
+  renderScheduleColorPicker();
+}
+
+async function loadTaskOptions() {
+  const tasks = await fetchJSON('/api/tasks?kanban=1');
+  const select = document.getElementById('schedule-task-link');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">— No task —</option>' +
+    (tasks || []).filter(t => t.status !== 'archived').map(t =>
+      `<option value="${t.id}">${escapeHtml(t.title)}</option>`
+    ).join('');
+  select.value = current;
+}
+
+async function saveScheduleEntry() {
+  const data = {
+    title: document.getElementById('schedule-title').value.trim(),
+    date: document.getElementById('schedule-date').value,
+    start_time: document.getElementById('schedule-start').value,
+    end_time: document.getElementById('schedule-end').value,
+    description: document.getElementById('schedule-desc').value.trim() || null,
+    color: selectedScheduleColor,
+    task_id: document.getElementById('schedule-task-link').value || null
+  };
+
+  if (!data.title || !data.date || !data.start_time || !data.end_time) return;
+
+  if (editingScheduleId) {
+    await fetchJSON(`/api/schedule/${editingScheduleId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+  } else {
+    await fetchJSON('/api/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+  }
+
+  closeScheduleModal();
+  refreshScheduleData();
+}
+
+async function deleteScheduleEntry() {
+  if (!editingScheduleId) return;
+  if (!confirm('Delete this schedule entry?')) return;
+  await fetchJSON(`/api/schedule/${editingScheduleId}`, { method: 'DELETE' });
+  closeScheduleModal();
+  refreshScheduleData();
+}
+
+function closeScheduleModal(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('schedule-modal').classList.remove('visible');
+  editingScheduleId = null;
 }
 
 // ===== VIEW: INBOX =====
@@ -895,6 +1574,7 @@ async function renderLog(container) {
           <option value="">All Agents</option>
           <option value="jarvis">🐶 Jarvis</option>
           <option value="klaus">⚡ Klaus</option>
+          <option value="emily">📧 Emily</option>
         </select>
         <input type="text" class="log-filter-search" id="log-filter-search" placeholder="Search actions..." oninput="logFilterSearch=this.value;refreshLogData()">
       </div>
@@ -1025,6 +1705,238 @@ async function refreshLogData() {
   }
 
   el.innerHTML = html;
+}
+
+// ===== VIEW: AGENT PROFILE =====
+
+let agentProfileState = {
+  name: null,
+  selectedFile: null,
+  files: [],
+  status: null,
+  activity: []
+};
+
+const AGENT_META = {
+  jarvis: { emoji: '🐶', defaultFile: 'MEMORY.md' },
+  klaus: { emoji: '⚡', defaultFile: 'AGENTS.md' },
+  emily: { emoji: '📧', defaultFile: 'AGENTS.md' }
+};
+
+async function renderAgentProfile(container, agentName) {
+  const name = agentName.toLowerCase();
+  const meta = AGENT_META[name] || { emoji: '🤖', defaultFile: null };
+  agentProfileState.name = name;
+  agentProfileState.selectedFile = null;
+
+  // Highlight sidebar agent
+  document.querySelectorAll('.sidebar-agent').forEach(el => el.classList.remove('sidebar-agent-active'));
+  document.getElementById(`sidebar-agent-${name}`)?.classList.add('sidebar-agent-active');
+  // Clear nav active states since this isn't a nav link page
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+
+  container.innerHTML = `
+    <div class="view-container agent-profile-view">
+      <div class="agent-profile-header">
+        <div class="agent-profile-identity">
+          <span class="agent-profile-emoji">${meta.emoji}</span>
+          <div>
+            <h1 class="agent-profile-name">${name.charAt(0).toUpperCase() + name.slice(1)}</h1>
+            <div class="agent-profile-model" id="ap-model">—</div>
+          </div>
+        </div>
+        <div class="agent-profile-badge" id="ap-badge">Loading...</div>
+      </div>
+
+      <div class="agent-profile-context" id="ap-context">
+        <div class="loading"><div class="spinner"></div> Loading status...</div>
+      </div>
+
+      <div class="agent-profile-stats" id="ap-stats"></div>
+
+      <div class="agent-profile-section">
+        <div class="agent-profile-section-title">Files</div>
+        <div class="agent-profile-file-tabs" id="ap-file-tabs">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+        <div class="agent-profile-file-content" id="ap-file-content">
+          <div class="empty-state">Select a file to view its contents</div>
+        </div>
+      </div>
+
+      <div class="agent-profile-section">
+        <div class="agent-profile-section-title">Recent Activity</div>
+        <div class="agent-profile-activity" id="ap-activity">
+          <div class="loading"><div class="spinner"></div> Loading activity...</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Fetch all data in parallel
+  const [status, files, activity] = await Promise.all([
+    fetchJSON(`/api/agent/${name}/status`),
+    fetchJSON(`/api/agent/${name}/files`),
+    fetchJSON(`/api/agent/${name}/activity`)
+  ]);
+
+  if (!currentView.startsWith('agent/')) return;
+
+  agentProfileState.status = status;
+  agentProfileState.files = files || [];
+  agentProfileState.activity = activity || [];
+
+  renderAgentProfileStatus(status);
+  renderAgentProfileFiles(files || [], meta.defaultFile);
+  renderAgentProfileActivity(activity || []);
+}
+
+function renderAgentProfileStatus(status) {
+  const badge = document.getElementById('ap-badge');
+  const modelEl = document.getElementById('ap-model');
+  const contextEl = document.getElementById('ap-context');
+  const statsEl = document.getElementById('ap-stats');
+
+  if (!badge || !status) return;
+
+  if (status.error) {
+    badge.textContent = 'Offline';
+    badge.className = 'agent-profile-badge offline';
+    modelEl.textContent = 'No status available';
+    contextEl.innerHTML = '';
+    statsEl.innerHTML = '';
+    return;
+  }
+
+  const updatedAgo = status.updated_at ? (Date.now() - new Date(status.updated_at).getTime()) / 60000 : 999;
+  if (updatedAgo > 5) {
+    badge.textContent = 'Idle';
+    badge.className = 'agent-profile-badge idle';
+  } else {
+    badge.textContent = 'Online';
+    badge.className = 'agent-profile-badge online';
+  }
+
+  modelEl.textContent = status.model || '—';
+
+  // Context window
+  const contextUsed = status.context_used || 0;
+  const contextMax = status.context_max || 200000;
+  const contextPct = Math.round((contextUsed / contextMax) * 100);
+  const contextK = Math.round(contextUsed / 1000);
+  const contextMaxK = Math.round(contextMax / 1000);
+
+  let barClass = '';
+  if (contextPct >= 80) barClass = 'danger';
+  else if (contextPct >= 60) barClass = 'warning';
+
+  contextEl.innerHTML = `
+    <div class="context-bar-container">
+      <div class="context-bar-label">
+        <span>Context Window</span>
+        <span>${contextK}k / ${contextMaxK}k tokens</span>
+      </div>
+      <div class="context-bar">
+        <div class="context-bar-fill ${barClass}" style="width: ${contextPct}%"></div>
+        <div class="context-bar-text">${contextPct}%</div>
+      </div>
+    </div>
+  `;
+
+  // Stats cards
+  const stats = [];
+  if (status.model) stats.push({ label: 'Model', value: status.model, cls: 'accent' });
+  if (status.tokens_in || status.tokens_out) stats.push({ label: 'Tokens In / Out', value: `${status.tokens_in || '—'} / ${status.tokens_out || '—'}`, cls: 'blue' });
+  if (status.compactions !== undefined) stats.push({ label: 'Compactions', value: status.compactions, cls: status.compactions > 0 ? 'orange' : 'green' });
+  if (status.thinking) stats.push({ label: 'Thinking', value: status.thinking, cls: '' });
+  if (status.status_text) stats.push({ label: 'Status', value: status.status_text, cls: '' });
+  if (status.project) stats.push({ label: 'Project', value: status.project, cls: 'orange' });
+
+  statsEl.innerHTML = stats.map(s => `
+    <div class="ap-stat-card">
+      <div class="ap-stat-label">${s.label}</div>
+      <div class="ap-stat-value ${s.cls}">${escapeHtml(String(s.value))}</div>
+    </div>
+  `).join('');
+}
+
+function renderAgentProfileFiles(files, defaultFile) {
+  const tabsEl = document.getElementById('ap-file-tabs');
+  if (!tabsEl) return;
+
+  if (files.length === 0) {
+    tabsEl.innerHTML = '<div class="empty-state">No files available</div>';
+    return;
+  }
+
+  tabsEl.innerHTML = files.map(f => `
+    <button class="ap-file-tab ${!f.exists ? 'missing' : ''}" data-path="${escapeHtml(f.path)}" onclick="selectAgentFile('${escapeHtml(f.path)}')">
+      ${escapeHtml(f.name)}
+      ${!f.exists ? '<span class="ap-file-missing-dot"></span>' : ''}
+    </button>
+  `).join('');
+
+  // Auto-select default file
+  const firstExisting = files.find(f => f.name === defaultFile && f.exists) || files.find(f => f.exists);
+  if (firstExisting) {
+    selectAgentFile(firstExisting.path);
+  }
+}
+
+async function selectAgentFile(filePath) {
+  agentProfileState.selectedFile = filePath;
+
+  // Update tab active states
+  document.querySelectorAll('.ap-file-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.path === filePath);
+  });
+
+  const contentEl = document.getElementById('ap-file-content');
+  if (!contentEl) return;
+  contentEl.innerHTML = '<div class="loading"><div class="spinner"></div> Loading file...</div>';
+
+  const data = await fetchJSON(`/api/agent/${agentProfileState.name}/file?path=${encodeURIComponent(filePath)}`);
+
+  if (!currentView.startsWith('agent/')) return;
+
+  if (!data || !data.exists || data.content === null) {
+    contentEl.innerHTML = `<div class="ap-file-empty"><span class="ap-file-empty-icon">📄</span><span>File not found or empty</span></div>`;
+    return;
+  }
+
+  contentEl.innerHTML = `
+    <div class="ap-file-viewer">
+      <div class="ap-file-viewer-header">
+        <span class="ap-file-viewer-name">${escapeHtml(data.name)}</span>
+        ${data.updated_at ? `<span class="ap-file-viewer-updated">Updated ${timeAgo(data.updated_at)}</span>` : ''}
+      </div>
+      <div class="ap-file-viewer-body markdown-body">${renderMarkdown(data.content)}</div>
+    </div>
+  `;
+}
+
+function renderAgentProfileActivity(entries) {
+  const el = document.getElementById('ap-activity');
+  if (!el) return;
+
+  if (!entries || entries.length === 0) {
+    el.innerHTML = '<div class="empty-state">No recent activity</div>';
+    return;
+  }
+
+  el.innerHTML = entries.map(e => `
+    <div class="ap-activity-item">
+      <div class="ap-activity-dot"></div>
+      <div class="ap-activity-content">
+        <span class="ap-activity-action">${escapeHtml(e.action)}</span>
+        ${e.description ? `<span class="ap-activity-desc"> — ${escapeHtml(e.description)}</span>` : ''}
+      </div>
+      <div class="ap-activity-meta">
+        <span class="ap-activity-time">${formatTime(e.started_at)}</span>
+        ${e.duration_ms ? `<span class="ap-activity-duration"> · ${formatDuration(e.duration_ms)}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
 }
 
 // ===== VIEW: PLACEHOLDER =====
@@ -1348,6 +2260,7 @@ document.addEventListener('keydown', (e) => {
     closeModal();
     closeNewCardModal();
     closeTaskModal();
+    closeScheduleModal();
   }
 });
 
@@ -1363,6 +2276,8 @@ async function periodicRefresh() {
   updateTimestamp();
   if (currentView === 'overview') {
     refreshOverviewData();
+  } else if (currentView === 'schedule') {
+    refreshScheduleData();
   }
 }
 

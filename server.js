@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions } = require('./db');
+const fs = require('fs');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -263,6 +264,80 @@ app.put('/api/tasks/:id/move', (req, res) => {
   }
 });
 
+// --- Schedule API ---
+
+app.post('/api/schedule', (req, res) => {
+  try {
+    const { title, description, start_time, end_time, date, color, task_id, recurring } = req.body;
+    if (!title || !start_time || !end_time || !date) {
+      return res.status(400).json({ error: 'title, start_time, end_time, and date required' });
+    }
+    const result = insertSchedule.run({
+      title,
+      description: description || null,
+      start_time,
+      end_time,
+      date,
+      color: color || '#7c6bf0',
+      task_id: task_id || null,
+      recurring: recurring || null
+    });
+    const entry = getScheduleById.get({ id: result.lastInsertRowid });
+    res.json(entry);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/schedule', (req, res) => {
+  try {
+    const { date, from, to } = req.query;
+    let entries;
+    if (date) {
+      entries = getScheduleByDate.all({ date });
+    } else if (from && to) {
+      entries = getScheduleByRange.all({ from, to });
+    } else {
+      // Default: today
+      const today = new Date().toISOString().slice(0, 10);
+      entries = getScheduleByDate.all({ date: today });
+    }
+    res.json(entries);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/schedule/:id', (req, res) => {
+  try {
+    const { title, description, start_time, end_time, date, color, task_id, recurring } = req.body;
+    updateSchedule.run({
+      id: parseInt(req.params.id),
+      title: title !== undefined ? title : null,
+      description: description !== undefined ? description : null,
+      start_time: start_time !== undefined ? start_time : null,
+      end_time: end_time !== undefined ? end_time : null,
+      date: date !== undefined ? date : null,
+      color: color !== undefined ? color : null,
+      task_id: task_id !== undefined ? task_id : null,
+      recurring: recurring !== undefined ? recurring : null
+    });
+    const entry = getScheduleById.get({ id: parseInt(req.params.id) });
+    res.json(entry);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/schedule/:id', (req, res) => {
+  try {
+    deleteSchedule.run({ id: parseInt(req.params.id) });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Documents API ---
 
 app.post('/api/docs', (req, res) => {
@@ -370,6 +445,115 @@ app.get('/api/log/stats', (req, res) => {
     const agentStats = getLogStats.all();
     const topActions = getLogTopActions.all();
     res.json({ agents: agentStats, topActions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Agent Files API ---
+
+const AGENT_WORKSPACES = {
+  jarvis: '/home/sasha/.openclaw/workspace',
+  klaus: '/home/sasha/.openclaw/agents/klaus/agent',
+  emily: '/home/sasha/.openclaw/agents/emily/agent'
+};
+
+const AGENT_FILES = {
+  jarvis: ['MEMORY.md', 'SOUL.md', 'USER.md', 'IDENTITY.md'],
+  klaus: ['AGENTS.md'],
+  emily: ['AGENTS.md']
+};
+
+// Whitelist: only allow these filenames (prevent path traversal)
+const ALLOWED_FILES = new Set(['MEMORY.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'AGENTS.md']);
+const DAILY_NOTE_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
+
+function isAllowedFile(filename) {
+  return ALLOWED_FILES.has(filename) || DAILY_NOTE_RE.test(filename);
+}
+
+app.get('/api/agent/:name/files', (req, res) => {
+  try {
+    const name = req.params.name.toLowerCase();
+    const workspace = AGENT_WORKSPACES[name];
+    if (!workspace) return res.status(404).json({ error: 'Unknown agent' });
+
+    const staticFiles = (AGENT_FILES[name] || []).map(f => {
+      const fullPath = path.join(workspace, f);
+      let exists = false;
+      try { exists = fs.existsSync(fullPath); } catch {}
+      return { name: f, path: f, exists };
+    });
+
+    // Add daily notes for jarvis (today + yesterday)
+    const dailyNotes = [];
+    if (name === 'jarvis') {
+      const memDir = path.join(workspace, 'memory');
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      for (const d of [today, yesterday]) {
+        const dateStr = d.toISOString().slice(0, 10);
+        const fileName = `memory/${dateStr}.md`;
+        const fullPath = path.join(workspace, fileName);
+        let exists = false;
+        try { exists = fs.existsSync(fullPath); } catch {}
+        dailyNotes.push({ name: `${dateStr}.md`, path: fileName, exists });
+      }
+    }
+
+    res.json([...staticFiles, ...dailyNotes]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/agent/:name/file', (req, res) => {
+  try {
+    const name = req.params.name.toLowerCase();
+    const workspace = AGENT_WORKSPACES[name];
+    if (!workspace) return res.status(404).json({ error: 'Unknown agent' });
+
+    const filePath = req.query.path;
+    if (!filePath || !isAllowedFile(filePath)) {
+      return res.status(400).json({ error: 'File not allowed' });
+    }
+
+    // Extra safety: ensure no path traversal
+    const resolved = path.resolve(workspace, filePath);
+    if (!resolved.startsWith(workspace)) {
+      return res.status(403).json({ error: 'Path traversal not allowed' });
+    }
+
+    if (!fs.existsSync(resolved)) {
+      return res.json({ name: path.basename(filePath), content: null, exists: false, updated_at: null });
+    }
+
+    const content = fs.readFileSync(resolved, 'utf-8');
+    const stat = fs.statSync(resolved);
+    res.json({
+      name: path.basename(filePath),
+      content,
+      exists: true,
+      updated_at: stat.mtime.toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/agent/:name/activity', (req, res) => {
+  try {
+    const name = req.params.name.toLowerCase();
+    const entries = getLogEntries.all({
+      agent: name,
+      since: null,
+      limit: 20
+    });
+    for (const e of entries) {
+      if (e.metadata) try { e.metadata = JSON.parse(e.metadata); } catch {}
+    }
+    res.json(entries);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

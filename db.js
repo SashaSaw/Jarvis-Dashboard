@@ -141,6 +141,63 @@ const moveTask = db.prepare(`
   WHERE id = @id
 `);
 
+// --- Schedule ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS schedule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    date TEXT NOT NULL,
+    color TEXT DEFAULT '#7c6bf0',
+    task_id INTEGER,
+    recurring TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_schedule_date ON schedule(date);
+`);
+
+const insertSchedule = db.prepare(`
+  INSERT INTO schedule (title, description, start_time, end_time, date, color, task_id, recurring)
+  VALUES (@title, @description, @start_time, @end_time, @date, @color, @task_id, @recurring)
+`);
+
+const getScheduleByDate = db.prepare(`
+  SELECT s.*, t.title as task_title FROM schedule s
+  LEFT JOIN tasks t ON s.task_id = t.id
+  WHERE s.date = @date
+  ORDER BY s.start_time ASC
+`);
+
+const getScheduleByRange = db.prepare(`
+  SELECT s.*, t.title as task_title FROM schedule s
+  LEFT JOIN tasks t ON s.task_id = t.id
+  WHERE s.date >= @from AND s.date <= @to
+  ORDER BY s.date ASC, s.start_time ASC
+`);
+
+const getScheduleById = db.prepare(`SELECT * FROM schedule WHERE id = @id`);
+
+const updateSchedule = db.prepare(`
+  UPDATE schedule SET
+    title = COALESCE(@title, title),
+    description = COALESCE(@description, description),
+    start_time = COALESCE(@start_time, start_time),
+    end_time = COALESCE(@end_time, end_time),
+    date = COALESCE(@date, date),
+    color = COALESCE(@color, color),
+    task_id = @task_id,
+    recurring = @recurring,
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const deleteSchedule = db.prepare(`DELETE FROM schedule WHERE id = @id`);
+
 // --- Documents ---
 
 db.exec(`
@@ -245,6 +302,12 @@ module.exports = {
   updateTask,
   deleteTask,
   moveTask,
+  insertSchedule,
+  getScheduleByDate,
+  getScheduleByRange,
+  getScheduleById,
+  updateSchedule,
+  deleteSchedule,
   insertDocument,
   getDocuments,
   getDocumentById,
