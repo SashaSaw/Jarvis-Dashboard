@@ -10,6 +10,10 @@ ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
+Environment=GOG_ACCOUNT=sawsasha26@gmail.com
+Environment=GOG_KEYRING_PASSWORD=REDACTED
+Environment=TRELLO_API_KEY=REDACTED
+Environment=TRELLO_TOKEN=REDACTED
 
 [Install]
 WantedBy=multi-user.target

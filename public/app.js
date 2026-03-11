@@ -280,6 +280,16 @@ async function renderOverview(container) {
           </div>
         </div>
 
+        <div class="card deliverables-card" id="deliverables-card">
+          <div class="card-header">
+            <span class="card-title">🚀 Scheduled Deliverables</span>
+            <span class="card-badge" style="background:rgba(167,139,250,0.15);color:#a78bfa">automated</span>
+          </div>
+          <div id="deliverables-content">
+            <div class="loading"><div class="spinner"></div> Loading...</div>
+          </div>
+        </div>
+
         <div class="card activity-feed-card">
           <div class="card-header">
             <span class="card-title">📡 Agent Activity Feed</span>
@@ -298,14 +308,15 @@ async function renderOverview(container) {
 async function refreshOverviewData() {
   if (currentView !== 'overview') return;
 
-  const [stats, events, sessions, calendar, jarvis, klaus, emily] = await Promise.all([
+  const [stats, events, sessions, calendar, jarvis, klaus, emily, deliverables] = await Promise.all([
     fetchJSON('/api/events/stats'),
     fetchJSON('/api/events?limit=50'),
     fetchJSON('/api/sessions/active'),
-    fetchJSON('/api/calendar?days=7'),
+    fetchJSON('/api/calendar?days=2'),
     fetchJSON('/api/agent/jarvis/status'),
     fetchJSON('/api/agent/klaus/status'),
-    fetchJSON('/api/agent/emily/status')
+    fetchJSON('/api/agent/emily/status'),
+    fetchJSON('/api/scheduled-deliverables')
   ]);
 
   if (currentView !== 'overview') return;
@@ -317,6 +328,7 @@ async function refreshOverviewData() {
   renderAgentStatus(klaus, 'klaus-status-content', 'klaus-status-badge', 'Klaus');
   renderAgentStatus(emily, 'emily-status-content', 'emily-status-badge', 'Emily');
   renderCalendar(calendar);
+  renderDeliverables(deliverables);
 }
 
 function renderStats(stats) {
@@ -504,6 +516,98 @@ function renderCalendar(events) {
   }).join('');
 }
 
+// ===== SCHEDULED DELIVERABLES =====
+
+function getNextDeliverableRun(deliverable) {
+  // Parse schedule time like "8:00 AM" or "4:00 PM"
+  const match = deliverable.schedule.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!match) return null;
+  let hours = parseInt(match[1]);
+  const mins = parseInt(match[2]);
+  const ampm = match[3].toUpperCase();
+  if (ampm === 'PM' && hours !== 12) hours += 12;
+  if (ampm === 'AM' && hours === 12) hours = 0;
+
+  const detail = (deliverable.scheduleDetail || '').toLowerCase();
+  const isWeekdaysOnly = detail.includes('weekday');
+  const isSundayOnly = detail.includes('sunday');
+
+  // Use London time
+  const now = new Date();
+  const londonNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/London' }));
+  const londonToday = new Date(londonNow.getFullYear(), londonNow.getMonth(), londonNow.getDate(), hours, mins, 0);
+
+  let next = new Date(londonToday);
+
+  // If already past today's run time, move to next day
+  if (londonNow >= londonToday) {
+    next.setDate(next.getDate() + 1);
+  }
+
+  // Skip to correct day based on schedule type
+  if (isSundayOnly) {
+    while (next.getDay() !== 0) {
+      next.setDate(next.getDate() + 1);
+    }
+  } else if (isWeekdaysOnly) {
+    while (next.getDay() === 0 || next.getDay() === 6) {
+      next.setDate(next.getDate() + 1);
+    }
+  }
+
+  // Format relative
+  const todayDate = new Date(londonNow.getFullYear(), londonNow.getMonth(), londonNow.getDate());
+  const nextDate = new Date(next.getFullYear(), next.getMonth(), next.getDate());
+  const diffDays = Math.round((nextDate - todayDate) / 86400000);
+
+  let dayLabel;
+  if (diffDays === 0) dayLabel = 'today';
+  else if (diffDays === 1) dayLabel = 'tomorrow';
+  else dayLabel = next.toLocaleDateString('en-GB', { weekday: 'long' });
+
+  return `${dayLabel} ${deliverable.schedule}`;
+}
+
+function getAgentBadge(agent) {
+  const a = (agent || '').toLowerCase();
+  if (a === 'emily') return '<span class="deliv-agent-badge emily">📧 Emily</span>';
+  if (a === 'jarvis') return '<span class="deliv-agent-badge jarvis">🐶 Jarvis</span>';
+  if (a === 'klaus') return '<span class="deliv-agent-badge klaus">⚡ Klaus</span>';
+  return `<span class="deliv-agent-badge">${escapeHtml(agent)}</span>`;
+}
+
+function renderDeliverables(deliverables) {
+  const el = document.getElementById('deliverables-content');
+  if (!el) return;
+
+  if (!deliverables || deliverables.length === 0) {
+    el.innerHTML = '<div class="empty-state">No scheduled deliverables</div>';
+    return;
+  }
+
+  el.innerHTML = deliverables.map(d => {
+    const nextRun = getNextDeliverableRun(d);
+    const dLow = (d.scheduleDetail || '').toLowerCase();
+    const freq = dLow.includes('sunday') ? 'sundays' : dLow.includes('weekday') ? 'weekdays' : dLow.includes('hourly') ? 'hourly' : 'daily';
+
+    return `
+      <div class="deliv-row ${d.enabled ? '' : 'disabled'}">
+        <div class="deliv-status-dot ${d.enabled ? 'enabled' : 'disabled'}"></div>
+        <div class="deliv-emoji">${d.emoji}</div>
+        <div class="deliv-info">
+          <div class="deliv-name">${escapeHtml(d.name.replace(/^[\p{Emoji}\s]+/u, ''))}</div>
+          <div class="deliv-desc">${escapeHtml(d.description)}</div>
+        </div>
+        <div class="deliv-meta">
+          <div class="deliv-schedule">${d.schedule} ${freq}</div>
+          ${nextRun ? `<div class="deliv-next">Next: ${nextRun}</div>` : ''}
+        </div>
+        <div class="deliv-agent">${getAgentBadge(d.agent)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
 // ===== VIEW: SCHEDULE (Calendar/Schedule) =====
 
 // Calendar date helpers
@@ -588,6 +692,17 @@ async function renderSchedule(container) {
         <div class="loading"><div class="spinner"></div> Loading schedule...</div>
       </div>
 
+      <!-- Scheduled Deliverables -->
+      <div class="card deliv-schedule-card" style="margin-top:1.25rem">
+        <div class="card-header">
+          <span class="card-title">🚀 Scheduled Deliverables</span>
+          <span class="card-badge" style="background:rgba(167,139,250,0.15);color:#a78bfa">recurring</span>
+        </div>
+        <div id="schedule-deliverables-content">
+          <div class="loading"><div class="spinner"></div> Loading...</div>
+        </div>
+      </div>
+
       <!-- Today's Agenda -->
       <div class="card" style="margin-top:1.25rem">
         <div class="card-header">
@@ -626,10 +741,11 @@ async function refreshScheduleData() {
 
   // Calculate calendar days needed from today
   const calDays = calViewMode === 'month' ? 45 : calViewMode === 'week' ? 14 : 7;
-  const [schedule, todaySchedule, calendar] = await Promise.all([
+  const [schedule, todaySchedule, calendar, deliverables] = await Promise.all([
     fetchJSON(`/api/schedule?from=${from}&to=${to}`),
     fetchJSON(`/api/schedule?date=${todayStr}`),
-    fetchJSON(`/api/calendar?days=${calDays}`)
+    fetchJSON(`/api/calendar?days=${calDays}`),
+    fetchJSON('/api/scheduled-deliverables')
   ]);
 
   if (currentView !== 'schedule') return;
@@ -672,17 +788,134 @@ async function refreshScheduleData() {
   const calContainer = document.getElementById('cal-container');
   if (!calContainer) return;
 
-  if (calViewMode === 'day') renderDayView(calContainer, schedule || [], calendarBlocks);
-  else if (calViewMode === 'week') renderWeekView(calContainer, schedule || [], calendarBlocks);
-  else renderMonthView(calContainer, schedule || [], calendarBlocks);
+  // Build deliverable blocks for the time grid
+  const deliverableBlocks = buildDeliverableBlocks(deliverables || [], from, to);
+
+  if (calViewMode === 'day') renderDayView(calContainer, schedule || [], calendarBlocks, deliverableBlocks);
+  else if (calViewMode === 'week') renderWeekView(calContainer, schedule || [], calendarBlocks, deliverableBlocks);
+  else renderMonthView(calContainer, schedule || [], calendarBlocks, deliverableBlocks);
+
+  // Render schedule deliverables section
+  renderScheduleDeliverables(deliverables || []);
 
   // Agenda
   renderAgenda(todaySchedule, calendar);
 }
 
+// ===== DELIVERABLE BLOCKS FOR SCHEDULE =====
+
+function buildDeliverableBlocks(deliverables, fromStr, toStr) {
+  if (!deliverables || deliverables.length === 0) return [];
+
+  const blocks = [];
+  const from = new Date(fromStr + 'T00:00:00');
+  const to = new Date(toStr + 'T23:59:59');
+
+  // Iterate each day in range
+  for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+    const dayOfWeek = d.getDay(); // 0=Sun, 6=Sat
+    const dateStr = calDateStr(d);
+
+    deliverables.forEach(del => {
+      if (!del.enabled) return;
+
+      const detailLower = (del.scheduleDetail || '').toLowerCase();
+      const isWeekday = detailLower.includes('weekday');
+      const isSunday = detailLower.includes('sunday');
+      if (isWeekday && (dayOfWeek === 0 || dayOfWeek === 6)) return;
+      if (isSunday && dayOfWeek !== 0) return;
+
+      // Parse time
+      const match = del.schedule.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+      if (!match) return;
+      let hours = parseInt(match[1]);
+      const mins = parseInt(match[2]);
+      const ampm = match[3].toUpperCase();
+      if (ampm === 'PM' && hours !== 12) hours += 12;
+      if (ampm === 'AM' && hours === 12) hours = 0;
+
+      const startTime = String(hours).padStart(2, '0') + ':' + String(mins).padStart(2, '0');
+      const endHour = hours;
+      const endMin = mins + 30; // 30-min block
+      const endTime = String(endMin >= 60 ? endHour + 1 : endHour).padStart(2, '0') + ':' + String(endMin % 60).padStart(2, '0');
+
+      blocks.push({
+        date: dateStr,
+        start_time: startTime,
+        end_time: endTime,
+        title: del.name,
+        emoji: del.emoji,
+        agent: del.agent,
+        description: del.description,
+        isDeliverable: true
+      });
+    });
+  }
+
+  return blocks;
+}
+
+function renderDeliverableBlocks(blocks, compact) {
+  return (blocks || []).map(e => {
+    const startMins = timeToMinutes(e.start_time) - CAL_START_HOUR * 60;
+    const endMins = timeToMinutes(e.end_time) - CAL_START_HOUR * 60;
+    const top = minutesToPx(Math.max(startMins, 0), CAL_HOUR_HEIGHT);
+    const height = Math.max(minutesToPx(endMins - Math.max(startMins, 0), CAL_HOUR_HEIGHT), 20);
+    const agentIcon = (e.agent || '').toLowerCase() === 'emily' ? '📧' : '🐶';
+
+    return `<div class="cal-block cal-block-deliverable" style="top:${top}px;height:${height}px"
+      title="${escapeHtml(e.title)}\n${e.start_time}\n${e.description || ''}">
+      <div class="cal-block-title">${escapeHtml(e.title)}</div>
+      ${!compact ? `<div class="cal-block-time">${e.start_time} · ${agentIcon} ${escapeHtml(e.agent)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderScheduleDeliverables(deliverables) {
+  const el = document.getElementById('schedule-deliverables-content');
+  if (!el) return;
+
+  if (!deliverables || deliverables.length === 0) {
+    el.innerHTML = '<div class="empty-state">No scheduled deliverables</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="sched-deliv-grid">
+      ${deliverables.map(d => {
+        const nextRun = getNextDeliverableRun(d);
+        const detailLow = (d.scheduleDetail || '').toLowerCase();
+        const isWeekday = detailLow.includes('weekday');
+        const isSunday = detailLow.includes('sunday');
+        const isHourly = detailLow.includes('hourly');
+        const freq = isSunday ? 'Sundays' : isWeekday ? 'Weekdays' : isHourly ? 'Hourly' : 'Daily';
+        const agentIcon = (d.agent || '').toLowerCase() === 'emily' ? '📧' : (d.agent || '').toLowerCase() === 'klaus' ? '⚡' : '🐶';
+
+        return `
+          <div class="sched-deliv-item ${d.enabled ? '' : 'disabled'}">
+            <div class="sched-deliv-time-col">
+              <div class="sched-deliv-time">${d.schedule}</div>
+              <div class="sched-deliv-freq">${freq}</div>
+            </div>
+            <div class="sched-deliv-dot ${d.enabled ? 'enabled' : 'disabled'}"></div>
+            <div class="sched-deliv-content">
+              <div class="sched-deliv-name">${escapeHtml(d.name)}</div>
+              <div class="sched-deliv-desc">${escapeHtml(d.description)}</div>
+              <div class="sched-deliv-meta">
+                <span class="sched-deliv-agent">${agentIcon} ${escapeHtml(d.agent)}</span>
+                ${nextRun ? `<span class="sched-deliv-next">Next: ${nextRun}</span>` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
 // ===== DAY VIEW =====
 
-function renderDayView(container, entries, calendarBlocks) {
+function renderDayView(container, entries, calendarBlocks, deliverableBlocks) {
   const totalHours = CAL_END_HOUR - CAL_START_HOUR;
   const gridHeight = totalHours * CAL_HOUR_HEIGHT;
 
@@ -698,7 +931,8 @@ function renderDayView(container, entries, calendarBlocks) {
   const dateStr = calDateStr(calSelectedDate);
   const todayEntries = entries.filter(e => e.date === dateStr);
   const todayCalBlocks = (calendarBlocks || []).filter(e => e.date === dateStr);
-  const blocksHtml = renderTimeBlocks(todayEntries, false) + renderGoogleCalBlocks(todayCalBlocks, false);
+  const todayDelivBlocks = (deliverableBlocks || []).filter(e => e.date === dateStr);
+  const blocksHtml = renderTimeBlocks(todayEntries, false) + renderGoogleCalBlocks(todayCalBlocks, false) + renderDeliverableBlocks(todayDelivBlocks, false);
 
   container.innerHTML = `
     <div class="cal-day-view">
@@ -718,7 +952,7 @@ function renderDayView(container, entries, calendarBlocks) {
 
 // ===== WEEK VIEW =====
 
-function renderWeekView(container, entries, calendarBlocks) {
+function renderWeekView(container, entries, calendarBlocks, deliverableBlocks) {
   const start = calWeekStart(calSelectedDate);
   const totalHours = CAL_END_HOUR - CAL_START_HOUR;
   const gridHeight = totalHours * CAL_HOUR_HEIGHT;
@@ -755,7 +989,8 @@ function renderWeekView(container, entries, calendarBlocks) {
     const isToday = ds === todayStr;
     const dayEntries = entries.filter(e => e.date === ds);
     const dayCalBlocks = (calendarBlocks || []).filter(e => e.date === ds);
-    const blocks = renderTimeBlocks(dayEntries, true) + renderGoogleCalBlocks(dayCalBlocks, true);
+    const dayDelivBlocks = (deliverableBlocks || []).filter(e => e.date === ds);
+    const blocks = renderTimeBlocks(dayEntries, true) + renderGoogleCalBlocks(dayCalBlocks, true) + renderDeliverableBlocks(dayDelivBlocks, true);
 
     let gridLines = '';
     for (let h = CAL_START_HOUR; h <= CAL_END_HOUR; h++) {
@@ -786,7 +1021,7 @@ function renderWeekView(container, entries, calendarBlocks) {
 
 // ===== MONTH VIEW =====
 
-function renderMonthView(container, entries, calendarBlocks) {
+function renderMonthView(container, entries, calendarBlocks, deliverableBlocks) {
   const todayStr = calDateStr(new Date());
   const ms = calMonthStart(calSelectedDate);
   const me = calMonthEnd(calSelectedDate);
@@ -804,6 +1039,11 @@ function renderMonthView(container, entries, calendarBlocks) {
   (calendarBlocks || []).forEach(e => {
     if (!byDate[e.date]) byDate[e.date] = [];
     byDate[e.date].push(e);
+  });
+  // Add deliverable blocks
+  (deliverableBlocks || []).forEach(e => {
+    if (!byDate[e.date]) byDate[e.date] = [];
+    byDate[e.date].push({ ...e, color: '#a78bfa' });
   });
 
   let headerHtml = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']

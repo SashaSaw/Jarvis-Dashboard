@@ -8,6 +8,49 @@ const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar')
 const app = express();
 const PORT = process.env.PORT || 3147;
 
+// --- Sensitive Data Redaction ---
+const REDACT_PATTERNS = [
+  // API keys and tokens (long hex/alphanumeric strings)
+  { pattern: /ATTA[0-9a-f]{60,}/gi, replacement: '[REDACTED_TOKEN]' },
+  // Trello API key
+  { pattern: /\b[0-9a-f]{32}\b/g, replacement: '[REDACTED_KEY]' },
+  // Telegram bot tokens
+  { pattern: /\b\d{9,10}:AA[A-Za-z0-9_-]{30,}\b/g, replacement: '[REDACTED_BOT_TOKEN]' },
+  // Email passwords / GOG keyring
+  { pattern: /GOG_KEYRING_PASSWORD[=:]\s*\S+/gi, replacement: 'GOG_KEYRING_PASSWORD=[REDACTED]' },
+  { pattern: /Brandy\d{4}/gi, replacement: '[REDACTED_PASSWORD]' },
+  // Generic password patterns
+  { pattern: /password[=:"'\s]+[^\s"',}{]{4,}/gi, replacement: 'password=[REDACTED]' },
+  // Bearer tokens
+  { pattern: /Bearer\s+[A-Za-z0-9._-]{20,}/gi, replacement: 'Bearer [REDACTED]' },
+  // SSH private key content
+  { pattern: /-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----/g, replacement: '[REDACTED_PRIVATE_KEY]' },
+];
+
+function redactSensitive(str) {
+  if (!str || typeof str !== 'string') return str;
+  let result = str;
+  for (const { pattern, replacement } of REDACT_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
+function redactObject(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const result = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (typeof val === 'string') {
+      result[key] = redactSensitive(val);
+    } else if (typeof val === 'object' && val !== null) {
+      result[key] = redactObject(val);
+    } else {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -15,14 +58,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.post('/api/hooks', (req, res) => {
   try {
-    const body = req.body;
+    const body = redactObject(req.body);
     const event = {
       event_type: body.event || 'unknown',
       session_id: body.session_id || null,
       project: body.project || null,
-      summary: body.summary || null,
-      files_changed: body.files_changed ? JSON.stringify(body.files_changed) : null,
-      metadata: body.metadata ? JSON.stringify(body.metadata) : null,
+      summary: redactSensitive(body.summary) || null,
+      files_changed: body.files_changed ? redactSensitive(JSON.stringify(body.files_changed)) : null,
+      metadata: body.metadata ? redactSensitive(JSON.stringify(body.metadata)) : null,
       created_at: body.timestamp || new Date().toISOString()
     };
 
@@ -345,8 +388,8 @@ app.post('/api/docs', (req, res) => {
     const { title, content, category } = req.body;
     if (!title) return res.status(400).json({ error: 'title required' });
     const result = insertDocument.run({
-      title,
-      content: content || '',
+      title: redactSensitive(title),
+      content: redactSensitive(content) || '',
       category: category || null
     });
     const doc = getDocumentById.get({ id: result.lastInsertRowid });
@@ -404,13 +447,13 @@ app.delete('/api/docs/:id', (req, res) => {
 
 app.post('/api/log', (req, res) => {
   try {
-    const { agent, action, description, reason, status, started_at, completed_at, duration_ms, metadata } = req.body;
+    const { agent, action, description, reason, status, started_at, completed_at, duration_ms, metadata } = redactObject(req.body);
     if (!agent || !action) return res.status(400).json({ error: 'agent and action required' });
     const result = insertLogEntry.run({
       agent,
       action,
-      description: description || null,
-      reason: reason || null,
+      description: redactSensitive(description) || null,
+      reason: redactSensitive(reason) || null,
       status: status || 'completed',
       started_at: started_at || new Date().toISOString(),
       completed_at: completed_at || null,
@@ -701,6 +744,21 @@ app.get('/api/agent/:name/capabilities', (req, res) => {
       agentType,
       workspace
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Scheduled Deliverables ---
+
+app.get('/api/scheduled-deliverables', (req, res) => {
+  try {
+    const filePath = path.join(__dirname, 'data', 'scheduled-deliverables.json');
+    if (!fs.existsSync(filePath)) {
+      return res.json([]);
+    }
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
