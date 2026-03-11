@@ -1,5 +1,12 @@
 const REFRESH_INTERVAL = 30000;
 
+// --- State ---
+let boardsData = null;
+let activeTab = 0;
+let currentCard = null;
+let currentBoardLists = null;
+let newCardListId = null;
+
 // --- Helpers ---
 
 function timeAgo(dateStr) {
@@ -14,20 +21,35 @@ function timeAgo(dateStr) {
 
 function formatTime(dateStr) {
   if (!dateStr) return '';
-  const d = new Date(dateStr);
-  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return new Date(dateStr).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatDate(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
   const today = new Date();
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
+  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
   if (d.toDateString() === today.toDateString()) return 'Today';
   if (d.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
   return d.toLocaleDateString('en-GB', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function formatDue(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diffDays = Math.ceil((d - now) / 86400000);
+  const text = d.toLocaleDateString('en-GB', { month: 'short', day: 'numeric' });
+  if (diffDays < 0) return { text, cls: 'overdue' };
+  if (diffDays <= 2) return { text, cls: 'soon' };
+  return { text, cls: '' };
+}
+
+function labelColorClass(color) {
+  const map = { green: 'label-green', yellow: 'label-yellow', orange: 'label-orange',
+    red: 'label-red', purple: 'label-purple', blue: 'label-blue', sky: 'label-sky',
+    lime: 'label-lime', pink: 'label-pink', black: 'label-black' };
+  return map[color] || 'label-blue';
 }
 
 function eventDotClass(type) {
@@ -49,17 +71,199 @@ function eventTagClass(type) {
   return '';
 }
 
-async function fetchJSON(url) {
+async function fetchJSON(url, opts) {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, opts);
     return await res.json();
   } catch (err) {
-    console.error(`Failed to fetch ${url}:`, err);
+    console.error(`Failed: ${url}`, err);
     return null;
   }
 }
 
-// --- Render Functions ---
+// --- Board Rendering ---
+
+function renderTabs(boards) {
+  const tabsEl = document.getElementById('project-tabs');
+  tabsEl.innerHTML = boards.map((b, i) => `
+    <div class="project-tab ${i === activeTab ? 'active' : ''}" onclick="switchTab(${i})">
+      ${b.name}
+      <span class="tab-count">${b.totalCards}</span>
+    </div>
+  `).join('');
+}
+
+function renderBoard(board) {
+  const container = document.getElementById('board-container');
+
+  if (board.error) {
+    container.innerHTML = `<div class="empty-state">${board.error}</div>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="board">
+      ${board.lists.map(list => `
+        <div class="board-list">
+          <div class="board-list-header">
+            <span class="board-list-name">${list.name}</span>
+            <span class="board-list-count">${list.cards.length}</span>
+          </div>
+          <div class="board-list-cards">
+            ${list.cards.map(card => {
+              const due = formatDue(card.due);
+              const hasLabels = card.labels && card.labels.length > 0;
+              const hasDesc = card.desc && card.desc.trim().length > 0;
+              return `
+                <div class="board-card" onclick='openCard(${JSON.stringify(card).replace(/'/g, "&#39;")})'>
+                  ${hasLabels ? `
+                    <div class="board-card-labels">
+                      ${card.labels.map(l => `<div class="board-card-label ${labelColorClass(l.color)}" title="${l.name || ''}"></div>`).join('')}
+                    </div>
+                  ` : ''}
+                  <div class="board-card-name">${card.name}</div>
+                  ${(due || hasDesc) ? `
+                    <div class="board-card-meta">
+                      ${hasDesc ? '<span class="board-card-desc-indicator">📝</span>' : ''}
+                      ${due ? `<span class="board-card-due ${due.cls}">🕐 ${due.text}</span>` : ''}
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+          <div class="add-card-btn" onclick="openNewCard('${list.id}')">+ Add card</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function switchTab(idx) {
+  activeTab = idx;
+  if (boardsData) {
+    renderTabs(boardsData.boards);
+    renderBoard(boardsData.boards[idx]);
+  }
+}
+
+async function refreshProjects() {
+  boardsData = await fetchJSON('/api/trello');
+  if (boardsData && boardsData.boards) {
+    renderTabs(boardsData.boards);
+    renderBoard(boardsData.boards[activeTab]);
+  }
+}
+
+// --- Card Modal ---
+
+function openCard(card) {
+  currentCard = card;
+  currentBoardLists = boardsData.boards[activeTab].lists;
+
+  document.getElementById('modal-card-name').textContent = card.name;
+  document.getElementById('modal-card-desc').textContent = card.desc || 'No description';
+
+  // Populate list dropdown
+  const select = document.getElementById('modal-card-list');
+  select.innerHTML = currentBoardLists.map(l =>
+    `<option value="${l.id}" ${l.cards.some(c => c.id === card.id) ? 'selected' : ''}>${l.name}</option>`
+  ).join('');
+
+  // Labels
+  const labelsEl = document.getElementById('modal-card-labels');
+  const labelsField = document.getElementById('modal-labels-field');
+  if (card.labels && card.labels.length > 0) {
+    labelsField.style.display = '';
+    labelsEl.innerHTML = card.labels.map(l =>
+      `<span style="display:inline-block;padding:0.15rem 0.5rem;border-radius:4px;font-size:0.75rem;margin-right:0.25rem;" class="${labelColorClass(l.color)}">${l.name || l.color}</span>`
+    ).join('');
+  } else {
+    labelsField.style.display = 'none';
+  }
+
+  // Due
+  const dueEl = document.getElementById('modal-card-due');
+  const dueField = document.getElementById('modal-due-field');
+  if (card.due) {
+    dueField.style.display = '';
+    const d = new Date(card.due);
+    dueEl.textContent = d.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  } else {
+    dueField.style.display = 'none';
+  }
+
+  document.getElementById('card-modal').classList.add('visible');
+}
+
+function closeModal(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('card-modal').classList.remove('visible');
+  currentCard = null;
+}
+
+async function moveCurrentCard() {
+  if (!currentCard) return;
+  const newListId = document.getElementById('modal-card-list').value;
+  await fetchJSON(`/api/trello/cards/${currentCard.id}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId: newListId })
+  });
+  closeModal();
+  refreshProjects();
+}
+
+async function archiveCurrentCard() {
+  if (!currentCard) return;
+  if (!confirm(`Archive "${currentCard.name}"?`)) return;
+  await fetchJSON(`/api/trello/cards/${currentCard.id}`, { method: 'DELETE' });
+  closeModal();
+  refreshProjects();
+}
+
+// --- New Card Modal ---
+
+function openNewCard(listId) {
+  newCardListId = listId;
+  document.getElementById('new-card-name').value = '';
+  document.getElementById('new-card-desc').value = '';
+  document.getElementById('new-card-modal').classList.add('visible');
+  setTimeout(() => document.getElementById('new-card-name').focus(), 100);
+}
+
+function closeNewCardModal(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('new-card-modal').classList.remove('visible');
+  newCardListId = null;
+}
+
+async function submitNewCard() {
+  const name = document.getElementById('new-card-name').value.trim();
+  if (!name || !newCardListId) return;
+  const desc = document.getElementById('new-card-desc').value.trim();
+  await fetchJSON('/api/trello/cards', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId: newCardListId, name, desc })
+  });
+  closeNewCardModal();
+  refreshProjects();
+}
+
+// Handle Enter key in new card name
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && document.getElementById('new-card-modal').classList.contains('visible')) {
+    e.preventDefault();
+    submitNewCard();
+  }
+  if (e.key === 'Escape') {
+    closeModal();
+    closeNewCardModal();
+  }
+});
+
+// --- Other Sections ---
 
 function renderStats(stats) {
   if (!stats) return;
@@ -90,8 +294,8 @@ function renderFeed(events) {
         </div>
         <div class="feed-meta">
           <span>${timeAgo(e.created_at)}</span>
-          ${e.project ? `<span>${e.project}</span>` : ''}
-          ${e.session_id ? `<span>session: ${e.session_id.slice(0, 8)}</span>` : ''}
+          ${e.project ? `<span>📁 ${e.project}</span>` : ''}
+          ${e.session_id ? `<span>🔗 ${e.session_id.slice(0, 8)}</span>` : ''}
         </div>
       </div>
     </li>
@@ -108,37 +312,12 @@ function renderSessions(sessions) {
 
   el.innerHTML = sessions.map(s => `
     <div class="session-card">
-      <div class="session-project">${s.project || 'Unknown project'}</div>
+      <div class="session-project">
+        <span class="session-project-dot"></span>
+        ${s.project || 'Unknown project'}
+      </div>
       <div class="session-summary">${s.summary || 'Working...'}</div>
       <div class="session-time">Started ${timeAgo(s.started_at)}</div>
-    </div>
-  `).join('');
-}
-
-function renderProjects(data) {
-  const el = document.getElementById('projects-content');
-
-  if (!data || data.error) {
-    el.innerHTML = `<div class="empty-state">${data?.error || 'Failed to load Trello boards'}</div>`;
-    return;
-  }
-
-  el.innerHTML = data.boards.map(board => `
-    <div class="project-board">
-      <div class="project-name">
-        ${board.name}
-        <span class="count">${board.totalCards} cards</span>
-      </div>
-      ${board.error ? `<div class="empty-state">${board.error}</div>` : `
-        <div class="trello-lists">
-          ${board.lists.filter(l => l.cards.length > 0).map(l => `
-            <div class="trello-list">
-              <div class="trello-list-name">${l.name}</div>
-              <div class="trello-list-count">${l.cards.length}</div>
-            </div>
-          `).join('')}
-        </div>
-      `}
     </div>
   `).join('');
 }
@@ -180,12 +359,17 @@ async function refreshAll() {
   renderStats(stats);
   renderFeed(events);
   renderSessions(sessions);
-  renderProjects(trello);
+
+  if (trello && trello.boards) {
+    boardsData = trello;
+    renderTabs(trello.boards);
+    renderBoard(trello.boards[activeTab]);
+  }
+
   renderCalendar(calendar);
 
   const now = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   document.getElementById('last-update').textContent = now;
-  document.getElementById('server-time').textContent = now;
 }
 
 // --- Init ---

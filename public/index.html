@@ -36,13 +36,23 @@
       </div>
     </div>
 
-    <!-- Projects -->
-    <div class="card" id="projects-card">
+    <!-- Projects Board (full width) -->
+    <div class="card projects-full">
       <div class="card-header">
-        <span class="card-title">📋 Projects</span>
-        <span class="card-badge" style="background:var(--accent-dim);color:var(--accent)">Trello</span>
+        <div class="project-tabs" id="project-tabs"></div>
+        <button class="btn-refresh" onclick="refreshProjects()" title="Refresh">↻</button>
       </div>
-      <div id="projects-content">
+      <div id="board-container" class="board-container">
+        <div class="loading"><div class="spinner"></div> Loading projects...</div>
+      </div>
+    </div>
+
+    <!-- Active Sessions -->
+    <div class="card" id="sessions-card">
+      <div class="card-header">
+        <span class="card-title">⚡ Active Agent Sessions</span>
+      </div>
+      <div id="sessions-content">
         <div class="loading"><div class="spinner"></div> Loading...</div>
       </div>
     </div>
@@ -58,28 +68,6 @@
       </div>
     </div>
 
-    <!-- Active Sessions -->
-    <div class="card" id="sessions-card">
-      <div class="card-header">
-        <span class="card-title">⚡ Active Agent Sessions</span>
-      </div>
-      <div id="sessions-content">
-        <div class="loading"><div class="spinner"></div> Loading...</div>
-      </div>
-    </div>
-
-    <!-- Quick Info -->
-    <div class="card">
-      <div class="card-header">
-        <span class="card-title">ℹ️ System</span>
-      </div>
-      <div style="font-size:0.85rem; color:var(--text-secondary);">
-        <p><strong>Webhook:</strong> <code style="font-family:var(--font-mono);font-size:0.8rem;background:var(--bg-primary);padding:0.15rem 0.4rem;border-radius:4px;">POST /api/hooks</code></p>
-        <p style="margin-top:0.5rem"><strong>Dashboard:</strong> Auto-refreshes every 30s</p>
-        <p style="margin-top:0.5rem"><strong>Server:</strong> <span id="server-time">--</span></p>
-      </div>
-    </div>
-
     <!-- Activity Feed -->
     <div class="card activity-feed">
       <div class="card-header">
@@ -87,8 +75,64 @@
         <span class="card-badge" style="background:var(--green-dim);color:var(--green)" id="feed-count">0 events</span>
       </div>
       <ul class="feed-list" id="activity-feed">
-        <li class="empty-state">No agent activity yet. Configure Claude Code hooks to start seeing events here.</li>
+        <li class="empty-state">No agent activity yet.</li>
       </ul>
+    </div>
+  </div>
+
+  <!-- Card Detail Modal -->
+  <div class="modal-overlay" id="card-modal" onclick="closeModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="modal-card-name"></h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label>Description</label>
+          <p id="modal-card-desc" class="modal-desc"></p>
+        </div>
+        <div class="modal-field">
+          <label>List</label>
+          <select id="modal-card-list" class="modal-select"></select>
+        </div>
+        <div class="modal-field" id="modal-labels-field">
+          <label>Labels</label>
+          <div id="modal-card-labels"></div>
+        </div>
+        <div class="modal-field" id="modal-due-field">
+          <label>Due</label>
+          <span id="modal-card-due"></span>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" id="modal-move-btn" onclick="moveCurrentCard()">Move Card</button>
+        <button class="btn-archive" onclick="archiveCurrentCard()">Archive</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Card Modal -->
+  <div class="modal-overlay" id="new-card-modal" onclick="closeNewCardModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3>New Card</h3>
+        <button class="modal-close" onclick="closeNewCardModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label>Title</label>
+          <input type="text" id="new-card-name" class="modal-input" placeholder="Card title..." autofocus>
+        </div>
+        <div class="modal-field">
+          <label>Description</label>
+          <textarea id="new-card-desc" class="modal-textarea" placeholder="Optional description..."></textarea>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="submitNewCard()">Create Card</button>
+        <button class="btn-archive" onclick="closeNewCardModal()">Cancel</button>
+      </div>
     </div>
   </div>
 

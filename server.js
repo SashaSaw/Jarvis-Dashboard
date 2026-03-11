@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { insertEvent, getEvents, getStats, getActiveSessions } = require('./db');
-const { getAllBoards } = require('./integrations/trello');
+const { getAllBoards, createCard, moveCard, archiveCard, updateCard } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
 const app = express();
@@ -44,7 +44,6 @@ app.get('/api/events', (req, res) => {
       since: since || null,
       limit: parseInt(limit) || 50
     });
-    // Parse JSON fields back
     for (const e of events) {
       if (e.files_changed) try { e.files_changed = JSON.parse(e.files_changed); } catch {}
       if (e.metadata) try { e.metadata = JSON.parse(e.metadata); } catch {}
@@ -73,7 +72,7 @@ app.get('/api/sessions/active', (req, res) => {
   }
 });
 
-// --- Integrations ---
+// --- Trello API ---
 
 app.get('/api/trello', async (req, res) => {
   try {
@@ -83,6 +82,48 @@ app.get('/api/trello', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.post('/api/trello/cards', async (req, res) => {
+  try {
+    const { listId, name, desc } = req.body;
+    if (!listId || !name) return res.status(400).json({ error: 'listId and name required' });
+    const card = await createCard(listId, name, desc);
+    res.json(card);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/trello/cards/:cardId/move', async (req, res) => {
+  try {
+    const { listId } = req.body;
+    if (!listId) return res.status(400).json({ error: 'listId required' });
+    const card = await moveCard(req.params.cardId, listId);
+    res.json(card);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/trello/cards/:cardId', async (req, res) => {
+  try {
+    const card = await updateCard(req.params.cardId, req.body);
+    res.json(card);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/trello/cards/:cardId', async (req, res) => {
+  try {
+    const card = await archiveCard(req.params.cardId);
+    res.json(card);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Calendar ---
 
 app.get('/api/calendar', (req, res) => {
   try {

@@ -9,7 +9,7 @@ const BOARDS = {
   habitat: '698334175bb84024b4a23f6b'
 };
 
-function fetch(url) {
+function trelloFetch(url) {
   return new Promise((resolve, reject) => {
     https.get(url, (res) => {
       let data = '';
@@ -22,29 +22,70 @@ function fetch(url) {
   });
 }
 
-async function getBoardSummary(boardId, boardName) {
+function trelloRequest(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const separator = path.includes('?') ? '&' : '?';
+    const fullPath = `${path}${separator}key=${API_KEY}&token=${TOKEN}`;
+    const url = new URL(`${BASE}${fullPath}`);
+    const postData = body ? new URLSearchParams(body).toString() : '';
+
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname + url.search,
+      method,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...(postData ? { 'Content-Length': Buffer.byteLength(postData) } : {})
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error(`Failed to parse: ${data.slice(0, 200)}`)); }
+      });
+    });
+    req.on('error', reject);
+    if (postData) req.write(postData);
+    req.end();
+  });
+}
+
+async function getFullBoard(boardId, boardName) {
   try {
-    const lists = await fetch(`${BASE}/boards/${boardId}/lists?key=${API_KEY}&token=${TOKEN}&fields=name,id`);
-    const cards = await fetch(`${BASE}/boards/${boardId}/cards?key=${API_KEY}&token=${TOKEN}&fields=name,idList,due,labels`);
+    const lists = await trelloFetch(`${BASE}/boards/${boardId}/lists?key=${API_KEY}&token=${TOKEN}&fields=name,id,pos`);
+    const cards = await trelloFetch(`${BASE}/boards/${boardId}/cards?key=${API_KEY}&token=${TOKEN}&fields=name,desc,idList,due,labels,pos,dateLastActivity`);
 
     const listMap = {};
     for (const list of lists) {
-      listMap[list.id] = { name: list.name, cards: [] };
+      listMap[list.id] = { id: list.id, name: list.name, pos: list.pos, cards: [] };
     }
     for (const card of cards) {
       if (listMap[card.idList]) {
         listMap[card.idList].cards.push({
+          id: card.id,
           name: card.name,
+          desc: card.desc || '',
           due: card.due,
-          labels: (card.labels || []).map(l => l.name).filter(Boolean)
+          pos: card.pos,
+          labels: (card.labels || []).map(l => ({ name: l.name, color: l.color })),
+          lastActivity: card.dateLastActivity
         });
       }
+    }
+
+    // Sort lists by position, cards by position within each list
+    const sortedLists = Object.values(listMap).sort((a, b) => a.pos - b.pos);
+    for (const list of sortedLists) {
+      list.cards.sort((a, b) => a.pos - b.pos);
     }
 
     return {
       name: boardName,
       id: boardId,
-      lists: Object.values(listMap),
+      lists: sortedLists,
       totalCards: cards.length
     };
   } catch (err) {
@@ -58,11 +99,28 @@ async function getAllBoards() {
   }
 
   const boards = await Promise.all([
-    getBoardSummary(BOARDS.adventune, 'Adventune 🎵'),
-    getBoardSummary(BOARDS.habitat, 'Habitat 🏠')
+    getFullBoard(BOARDS.adventune, 'Adventune 🎵'),
+    getFullBoard(BOARDS.habitat, 'Habitat 🏠')
   ]);
 
   return { boards };
 }
 
-module.exports = { getAllBoards, BOARDS };
+// Card operations
+async function createCard(listId, name, desc) {
+  return trelloRequest('POST', '/cards', { idList: listId, name, desc: desc || '' });
+}
+
+async function moveCard(cardId, newListId) {
+  return trelloRequest('PUT', `/cards/${cardId}`, { idList: newListId });
+}
+
+async function archiveCard(cardId) {
+  return trelloRequest('PUT', `/cards/${cardId}`, { closed: 'true' });
+}
+
+async function updateCard(cardId, fields) {
+  return trelloRequest('PUT', `/cards/${cardId}`, fields);
+}
+
+module.exports = { getAllBoards, getFullBoard, createCard, moveCard, archiveCard, updateCard, BOARDS };
