@@ -141,6 +141,95 @@ const moveTask = db.prepare(`
   WHERE id = @id
 `);
 
+// --- Documents ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    category TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_documents_updated ON documents(updated_at);
+`);
+
+const insertDocument = db.prepare(`
+  INSERT INTO documents (title, content, category)
+  VALUES (@title, @content, @category)
+`);
+
+const getDocuments = db.prepare(`
+  SELECT id, title, category, updated_at FROM documents ORDER BY updated_at DESC
+`);
+
+const getDocumentById = db.prepare(`
+  SELECT * FROM documents WHERE id = @id
+`);
+
+const updateDocument = db.prepare(`
+  UPDATE documents SET
+    title = COALESCE(@title, title),
+    content = COALESCE(@content, content),
+    category = COALESCE(@category, category),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const deleteDocument = db.prepare(`DELETE FROM documents WHERE id = @id`);
+
+// --- Action Log ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS action_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    action TEXT NOT NULL,
+    description TEXT,
+    reason TEXT,
+    status TEXT DEFAULT 'completed',
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    duration_ms INTEGER,
+    metadata TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_action_log_started ON action_log(started_at);
+  CREATE INDEX IF NOT EXISTS idx_action_log_agent ON action_log(agent);
+`);
+
+const insertLogEntry = db.prepare(`
+  INSERT INTO action_log (agent, action, description, reason, status, started_at, completed_at, duration_ms, metadata)
+  VALUES (@agent, @action, @description, @reason, @status, @started_at, @completed_at, @duration_ms, @metadata)
+`);
+
+const getLogEntries = db.prepare(`
+  SELECT * FROM action_log
+  WHERE (@agent IS NULL OR agent = @agent)
+    AND (@since IS NULL OR started_at >= @since)
+  ORDER BY started_at DESC
+  LIMIT @limit
+`);
+
+const getLogStats = db.prepare(`
+  SELECT
+    agent,
+    COUNT(*) as total,
+    SUM(CASE WHEN started_at >= date('now') THEN 1 ELSE 0 END) as today,
+    ROUND(AVG(duration_ms)) as avg_duration_ms
+  FROM action_log
+  GROUP BY agent
+`);
+
+const getLogTopActions = db.prepare(`
+  SELECT action, COUNT(*) as count
+  FROM action_log
+  WHERE started_at >= date('now', '-7 days')
+  GROUP BY action
+  ORDER BY count DESC
+  LIMIT 10
+`);
+
 module.exports = {
   db,
   insertEvent,
@@ -155,5 +244,14 @@ module.exports = {
   getTaskById,
   updateTask,
   deleteTask,
-  moveTask
+  moveTask,
+  insertDocument,
+  getDocuments,
+  getDocumentById,
+  updateDocument,
+  deleteDocument,
+  insertLogEntry,
+  getLogEntries,
+  getLogStats,
+  getLogTopActions
 };

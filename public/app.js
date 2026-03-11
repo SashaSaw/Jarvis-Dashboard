@@ -130,8 +130,8 @@ function route() {
     case 'inbox': renderInbox(main); break;
     case 'kanban': renderKanban(main); break;
     case 'projects': renderProjects(main); break;
-    case 'docs': renderPlaceholder(main, '📝', 'Docs', 'Coming soon — documentation viewer'); break;
-    case 'log': renderPlaceholder(main, '📜', 'Activity Log', 'Coming soon — full event log with search & filters'); break;
+    case 'docs': renderDocs(main); break;
+    case 'log': renderLog(main); break;
     default: renderOverview(main); break;
   }
 }
@@ -682,6 +682,349 @@ async function renderProjects(container) {
     </div>
   `;
   refreshProjects();
+}
+
+// ===== VIEW: DOCS =====
+
+let docsSelectedId = null;
+let docsEditing = false;
+
+const DOC_CATEGORIES = ['plan', 'notes', 'analytics', 'learning'];
+
+function renderMarkdown(md) {
+  if (!md) return '';
+  let html = escapeHtml(md);
+
+  // Code blocks (```...```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre class="md-code-block"><code>${code.trim()}</code></pre>`
+  );
+
+  // Inline code
+  html = html.replace(/`([^`\n]+)`/g, '<code class="md-inline-code">$1</code>');
+
+  // Headers
+  html = html.replace(/^#### (.+)$/gm, '<h4 class="md-h4">$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3 class="md-h3">$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2 class="md-h2">$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1 class="md-h1">$1</h1>');
+
+  // Bold & italic
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="md-link" target="_blank">$1</a>');
+
+  // Unordered lists
+  html = html.replace(/^[\-\*] (.+)$/gm, '<li class="md-li">$1</li>');
+  html = html.replace(/((?:<li class="md-li">.*<\/li>\n?)+)/g, '<ul class="md-ul">$1</ul>');
+
+  // Ordered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '<li class="md-oli">$1</li>');
+  html = html.replace(/((?:<li class="md-oli">.*<\/li>\n?)+)/g, '<ol class="md-ol">$1</ol>');
+
+  // Horizontal rule
+  html = html.replace(/^---+$/gm, '<hr class="md-hr">');
+
+  // Paragraphs (double newlines)
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+  // Clean up empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
+  // Don't wrap block elements in p
+  html = html.replace(/<p>\s*(<(?:h[1-4]|ul|ol|pre|hr))/g, '$1');
+  html = html.replace(/(<\/(?:h[1-4]|ul|ol|pre|hr)>)\s*<\/p>/g, '$1');
+
+  return html;
+}
+
+async function renderDocs(container) {
+  container.innerHTML = `
+    <div class="view-container docs-view">
+      <div class="docs-layout">
+        <div class="docs-sidebar">
+          <div class="docs-sidebar-header">
+            <h3 class="docs-sidebar-title">Documents</h3>
+            <button class="btn-new-doc" onclick="newDocument()">+ New</button>
+          </div>
+          <div class="docs-list" id="docs-list">
+            <div class="loading"><div class="spinner"></div> Loading...</div>
+          </div>
+        </div>
+        <div class="docs-main" id="docs-main">
+          <div class="docs-empty-state">
+            <div class="placeholder-icon">📝</div>
+            <div class="placeholder-text">Select a document</div>
+            <div class="placeholder-sub">Or create a new one to get started</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  refreshDocsList();
+}
+
+async function refreshDocsList() {
+  if (currentView !== 'docs') return;
+  const docs = await fetchJSON('/api/docs');
+  const el = document.getElementById('docs-list');
+  if (!el || currentView !== 'docs') return;
+
+  if (!docs || docs.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="padding:1rem;text-align:center">No documents yet</div>';
+    return;
+  }
+
+  el.innerHTML = docs.map(d => `
+    <div class="docs-list-item ${docsSelectedId === d.id ? 'active' : ''}" onclick="selectDoc(${d.id})">
+      <div class="docs-list-title">${escapeHtml(d.title)}</div>
+      <div class="docs-list-meta">
+        ${d.category ? `<span class="docs-category-badge cat-${d.category}">${d.category}</span>` : ''}
+        <span>${timeAgo(d.updated_at)}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function selectDoc(id) {
+  docsSelectedId = id;
+  docsEditing = false;
+  refreshDocsList();
+  const doc = await fetchJSON(`/api/docs/${id}`);
+  const main = document.getElementById('docs-main');
+  if (!main || !doc || currentView !== 'docs') return;
+
+  main.innerHTML = `
+    <div class="docs-viewer">
+      <div class="docs-viewer-header">
+        <h2 class="docs-viewer-title">${escapeHtml(doc.title)}</h2>
+        <div class="docs-viewer-actions">
+          ${doc.category ? `<span class="docs-category-badge cat-${doc.category}">${doc.category}</span>` : ''}
+          <button class="btn-doc-action" onclick="editDoc(${doc.id})">✏️ Edit</button>
+        </div>
+      </div>
+      <div class="docs-viewer-meta">Updated ${timeAgo(doc.updated_at)} · Created ${timeAgo(doc.created_at)}</div>
+      <div class="docs-content markdown-body">${renderMarkdown(doc.content)}</div>
+    </div>
+  `;
+}
+
+async function editDoc(id) {
+  const doc = await fetchJSON(`/api/docs/${id}`);
+  const main = document.getElementById('docs-main');
+  if (!main || !doc) return;
+  docsEditing = true;
+
+  main.innerHTML = `
+    <div class="docs-editor">
+      <div class="docs-editor-header">
+        <input type="text" class="docs-title-input" id="doc-edit-title" value="${escapeHtml(doc.title)}" placeholder="Document title...">
+        <select class="docs-category-select" id="doc-edit-category">
+          <option value="">No category</option>
+          ${DOC_CATEGORIES.map(c => `<option value="${c}" ${doc.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+        </select>
+      </div>
+      <textarea class="docs-content-input" id="doc-edit-content" placeholder="Write in markdown...">${escapeHtml(doc.content)}</textarea>
+      <div class="docs-editor-actions">
+        <button class="btn-move" onclick="saveDoc(${doc.id})">Save</button>
+        <button class="btn-archive" onclick="selectDoc(${doc.id})">Cancel</button>
+        <button class="btn-doc-delete" onclick="deleteDoc(${doc.id})">🗑 Delete</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('doc-edit-content').focus();
+}
+
+async function saveDoc(id) {
+  const title = document.getElementById('doc-edit-title').value.trim();
+  const content = document.getElementById('doc-edit-content').value;
+  const category = document.getElementById('doc-edit-category').value || null;
+  if (!title) return;
+
+  await fetchJSON(`/api/docs/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, content, category })
+  });
+  docsEditing = false;
+  refreshDocsList();
+  selectDoc(id);
+}
+
+async function deleteDoc(id) {
+  if (!confirm('Delete this document?')) return;
+  await fetchJSON(`/api/docs/${id}`, { method: 'DELETE' });
+  docsSelectedId = null;
+  docsEditing = false;
+  renderDocs(document.getElementById('main-content'));
+}
+
+async function newDocument() {
+  const doc = await fetchJSON('/api/docs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Untitled Document', content: '', category: null })
+  });
+  if (doc && doc.id) {
+    docsSelectedId = doc.id;
+    refreshDocsList();
+    editDoc(doc.id);
+  }
+}
+
+// ===== VIEW: ACTIVITY LOG =====
+
+let logAutoRefreshTimer = null;
+let logFilterAgent = '';
+let logFilterSearch = '';
+
+async function renderLog(container) {
+  // Clear any existing auto-refresh
+  if (logAutoRefreshTimer) clearInterval(logAutoRefreshTimer);
+
+  container.innerHTML = `
+    <div class="view-container">
+      <div class="view-header">
+        <h2 class="view-title">📜 Activity Log</h2>
+        <button class="btn-refresh" onclick="refreshLogData()" title="Refresh">↻</button>
+      </div>
+      <div class="log-filters">
+        <select class="log-filter-select" id="log-filter-agent" onchange="logFilterAgent=this.value;refreshLogData()">
+          <option value="">All Agents</option>
+          <option value="jarvis">🐶 Jarvis</option>
+          <option value="klaus">⚡ Klaus</option>
+        </select>
+        <input type="text" class="log-filter-search" id="log-filter-search" placeholder="Search actions..." oninput="logFilterSearch=this.value;refreshLogData()">
+      </div>
+      <div class="log-stats-row" id="log-stats"></div>
+      <div class="log-entries" id="log-entries">
+        <div class="loading"><div class="spinner"></div> Loading...</div>
+      </div>
+    </div>
+  `;
+  refreshLogData();
+  logAutoRefreshTimer = setInterval(() => {
+    if (currentView === 'log') refreshLogData();
+  }, 30000);
+}
+
+function getDateGroup(dateStr) {
+  if (!dateStr) return 'Unknown';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+  const itemDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  if (itemDate.getTime() === today.getTime()) return 'Today';
+  if (itemDate.getTime() === yesterday.getTime()) return 'Yesterday';
+  return d.toLocaleDateString('en-GB', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+function formatDuration(ms) {
+  if (!ms && ms !== 0) return '—';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
+}
+
+function logStatusBadge(status) {
+  const cls = status === 'completed' ? 'log-status-completed' :
+              status === 'failed' ? 'log-status-failed' : 'log-status-progress';
+  return `<span class="log-status-badge ${cls}">${status}</span>`;
+}
+
+function logAgentBadge(agent) {
+  const isJarvis = agent.toLowerCase() === 'jarvis';
+  const icon = isJarvis ? '🐶' : '⚡';
+  const cls = isJarvis ? 'log-agent-jarvis' : 'log-agent-klaus';
+  return `<span class="log-agent-badge ${cls}">${icon} ${agent}</span>`;
+}
+
+async function refreshLogData() {
+  if (currentView !== 'log') return;
+
+  const params = new URLSearchParams();
+  if (logFilterAgent) params.set('agent', logFilterAgent);
+  params.set('limit', '200');
+
+  const [entries, stats] = await Promise.all([
+    fetchJSON(`/api/log?${params}`),
+    fetchJSON('/api/log/stats')
+  ]);
+
+  if (currentView !== 'log') return;
+
+  // Render stats
+  const statsEl = document.getElementById('log-stats');
+  if (statsEl && stats) {
+    const agents = stats.agents || [];
+    statsEl.innerHTML = agents.map(a => `
+      <div class="log-stat-card">
+        <span class="log-stat-agent">${a.agent === 'jarvis' ? '🐶' : '⚡'} ${a.agent}</span>
+        <span class="log-stat-value">${a.today} today</span>
+        <span class="log-stat-sub">${a.total} total · avg ${formatDuration(a.avg_duration_ms)}</span>
+      </div>
+    `).join('');
+  }
+
+  // Render entries
+  const el = document.getElementById('log-entries');
+  if (!el) return;
+
+  let filtered = entries || [];
+  if (logFilterSearch) {
+    const q = logFilterSearch.toLowerCase();
+    filtered = filtered.filter(e =>
+      (e.action && e.action.toLowerCase().includes(q)) ||
+      (e.description && e.description.toLowerCase().includes(q)) ||
+      (e.reason && e.reason.toLowerCase().includes(q))
+    );
+  }
+
+  if (filtered.length === 0) {
+    el.innerHTML = `
+      <div class="docs-empty-state" style="padding:3rem;text-align:center">
+        <div class="placeholder-icon">📜</div>
+        <div class="placeholder-text">No log entries</div>
+        <div class="placeholder-sub">Activity will appear here as Jarvis and Klaus take actions</div>
+      </div>
+    `;
+    return;
+  }
+
+  // Group by date
+  const groups = {};
+  filtered.forEach(e => {
+    const group = getDateGroup(e.started_at);
+    if (!groups[group]) groups[group] = [];
+    groups[group].push(e);
+  });
+
+  let html = '';
+  for (const [group, items] of Object.entries(groups)) {
+    html += `<div class="log-date-group"><div class="log-date-label">${group}</div>`;
+    html += items.map((e, i) => `
+      <div class="log-entry ${i % 2 === 0 ? 'log-entry-even' : ''}">
+        <div class="log-entry-agent">${logAgentBadge(e.agent)}</div>
+        <div class="log-entry-content">
+          <div class="log-entry-action">${escapeHtml(e.action)}</div>
+          ${e.description ? `<div class="log-entry-desc">${escapeHtml(e.description)}</div>` : ''}
+          ${e.reason ? `<div class="log-entry-reason">↳ ${escapeHtml(e.reason)}</div>` : ''}
+        </div>
+        <div class="log-entry-meta">
+          ${logStatusBadge(e.status || 'completed')}
+          <span class="log-entry-time">${formatTime(e.started_at)}</span>
+          <span class="log-entry-duration">${formatDuration(e.duration_ms)}</span>
+        </div>
+      </div>
+    `).join('');
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
 }
 
 // ===== VIEW: PLACEHOLDER =====

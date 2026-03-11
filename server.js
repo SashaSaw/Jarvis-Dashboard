@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -258,6 +258,118 @@ app.put('/api/tasks/:id/move', (req, res) => {
     moveTask.run({ id: parseInt(req.params.id), status });
     const task = getTaskById.get({ id: parseInt(req.params.id) });
     res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Documents API ---
+
+app.post('/api/docs', (req, res) => {
+  try {
+    const { title, content, category } = req.body;
+    if (!title) return res.status(400).json({ error: 'title required' });
+    const result = insertDocument.run({
+      title,
+      content: content || '',
+      category: category || null
+    });
+    const doc = getDocumentById.get({ id: result.lastInsertRowid });
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/docs', (req, res) => {
+  try {
+    const docs = getDocuments.all();
+    res.json(docs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/docs/:id', (req, res) => {
+  try {
+    const doc = getDocumentById.get({ id: parseInt(req.params.id) });
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/docs/:id', (req, res) => {
+  try {
+    const { title, content, category } = req.body;
+    updateDocument.run({
+      id: parseInt(req.params.id),
+      title: title !== undefined ? title : null,
+      content: content !== undefined ? content : null,
+      category: category !== undefined ? category : null
+    });
+    const doc = getDocumentById.get({ id: parseInt(req.params.id) });
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/docs/:id', (req, res) => {
+  try {
+    deleteDocument.run({ id: parseInt(req.params.id) });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Action Log API ---
+
+app.post('/api/log', (req, res) => {
+  try {
+    const { agent, action, description, reason, status, started_at, completed_at, duration_ms, metadata } = req.body;
+    if (!agent || !action) return res.status(400).json({ error: 'agent and action required' });
+    const result = insertLogEntry.run({
+      agent,
+      action,
+      description: description || null,
+      reason: reason || null,
+      status: status || 'completed',
+      started_at: started_at || new Date().toISOString(),
+      completed_at: completed_at || null,
+      duration_ms: duration_ms || null,
+      metadata: metadata ? (typeof metadata === 'string' ? metadata : JSON.stringify(metadata)) : null
+    });
+    res.json({ ok: true, id: Number(result.lastInsertRowid) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/log', (req, res) => {
+  try {
+    const { agent, since, limit } = req.query;
+    const entries = getLogEntries.all({
+      agent: agent || null,
+      since: since || null,
+      limit: parseInt(limit) || 100
+    });
+    for (const e of entries) {
+      if (e.metadata) try { e.metadata = JSON.parse(e.metadata); } catch {}
+    }
+    res.json(entries);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/log/stats', (req, res) => {
+  try {
+    const agentStats = getLogStats.all();
+    const topActions = getLogTopActions.all();
+    res.json({ agents: agentStats, topActions });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
