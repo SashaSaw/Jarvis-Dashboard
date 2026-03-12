@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -488,6 +488,346 @@ app.get('/api/log/stats', (req, res) => {
     const agentStats = getLogStats.all();
     const topActions = getLogTopActions.all();
     res.json({ agents: agentStats, topActions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Project Hub API ---
+
+// Projects
+app.get('/api/projects', (req, res) => {
+  try {
+    const projects = getProjects.all();
+    res.json(projects);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/projects/:id', (req, res) => {
+  try {
+    const project = getProjectById.get({ id: req.params.id });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const sections = getSectionsByProject.all({ project_id: req.params.id });
+    const tags = getTagsByProject.all({ project_id: req.params.id });
+    const features = getFeaturesByProject.all({ project_id: req.params.id });
+    const feedback = getFeedbackByProject.all({ project_id: req.params.id });
+    res.json({ ...project, sections, tags, features, feedback });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects', (req, res) => {
+  try {
+    const { id, name, tagline, icon, status, platform, tech_stack, current_version, next_version, release_date, category, app_store_url, github_url, landing_url, trello_board_id } = req.body;
+    if (!id || !name) return res.status(400).json({ error: 'id and name required' });
+    insertProject.run({
+      id, name,
+      tagline: tagline || null,
+      icon: icon || null,
+      status: status || 'active',
+      platform: platform || null,
+      tech_stack: tech_stack || null,
+      current_version: current_version || null,
+      next_version: next_version || null,
+      release_date: release_date || null,
+      category: category || null,
+      app_store_url: app_store_url || null,
+      github_url: github_url || null,
+      landing_url: landing_url || null,
+      trello_board_id: trello_board_id || null
+    });
+    const project = getProjectById.get({ id });
+    res.json(project);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/projects/:id', (req, res) => {
+  try {
+    const fields = ['name','tagline','icon','status','platform','tech_stack','current_version','next_version','release_date','category','app_store_url','github_url','landing_url','trello_board_id'];
+    const params = { id: req.params.id };
+    for (const f of fields) params[f] = req.body[f] !== undefined ? req.body[f] : null;
+    updateProject.run(params);
+    const project = getProjectById.get({ id: req.params.id });
+    res.json(project);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Archive a project (soft delete)
+app.delete('/api/projects/:id', (req, res) => {
+  try {
+    archiveProject.run({ id: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Permanently delete an archived project and all its data
+app.delete('/api/projects/:id/permanent', (req, res) => {
+  try {
+    const project = getProjectById.get({ id: req.params.id });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (project.status !== 'archived') return res.status(400).json({ error: 'Only archived projects can be permanently deleted' });
+    deleteProjectFeedback.run({ project_id: req.params.id });
+    deleteProjectTags.run({ project_id: req.params.id });
+    deleteProjectFeatures.run({ project_id: req.params.id });
+    deleteProjectSections.run({ project_id: req.params.id });
+    deleteProjectPermanent.run({ id: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Project Sections
+app.get('/api/projects/:id/sections', (req, res) => {
+  try {
+    const sections = getSectionsByProject.all({ project_id: req.params.id });
+    res.json(sections);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:id/sections', (req, res) => {
+  try {
+    const { section_type, title, content, sort_order } = req.body;
+    if (!section_type) return res.status(400).json({ error: 'section_type required' });
+    const result = insertSection.run({
+      project_id: req.params.id,
+      section_type,
+      title: title || null,
+      content: content || null,
+      sort_order: sort_order || 0
+    });
+    const section = getSectionById.get({ id: result.lastInsertRowid });
+    res.json(section);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/projects/:id/sections/:sectionId', (req, res) => {
+  try {
+    const { title, content, sort_order } = req.body;
+    updateSection.run({
+      id: parseInt(req.params.sectionId),
+      title: title !== undefined ? title : null,
+      content: content !== undefined ? content : null,
+      sort_order: sort_order !== undefined ? sort_order : null
+    });
+    const section = getSectionById.get({ id: parseInt(req.params.sectionId) });
+    res.json(section);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:id/sections/:sectionId', (req, res) => {
+  try {
+    deleteSection.run({ id: parseInt(req.params.sectionId) });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Features
+app.get('/api/projects/:id/features', (req, res) => {
+  try {
+    let features = getFeaturesByProject.all({ project_id: req.params.id });
+    const { status, version, tag } = req.query;
+    if (status) features = features.filter(f => f.status === status);
+    if (version) features = features.filter(f => f.version_target === version);
+    if (tag) features = features.filter(f => f.tags && f.tags.split(',').map(t=>t.trim()).includes(tag));
+    res.json(features);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:id/features', (req, res) => {
+  try {
+    const { name, description, status, version_target, version_shipped, tags, priority, source, trello_card_id, prompt } = req.body;
+    if (!name) return res.status(400).json({ error: 'name required' });
+    const result = insertFeature.run({
+      project_id: req.params.id,
+      name,
+      description: description || null,
+      status: status || 'idea',
+      version_target: version_target || null,
+      version_shipped: version_shipped || null,
+      tags: tags || null,
+      priority: priority || 'normal',
+      source: source || null,
+      trello_card_id: trello_card_id || null,
+      prompt: prompt || null
+    });
+    const feature = getFeatureById.get({ id: result.lastInsertRowid });
+    res.json(feature);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/projects/:id/features/:featureId', (req, res) => {
+  try {
+    const fields = ['name','description','status','version_target','version_shipped','tags','priority','source','trello_card_id','prompt'];
+    const params = { id: parseInt(req.params.featureId) };
+    for (const f of fields) params[f] = req.body[f] !== undefined ? req.body[f] : null;
+    updateFeature.run(params);
+    const feature = getFeatureById.get({ id: parseInt(req.params.featureId) });
+    res.json(feature);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:id/features/:featureId', (req, res) => {
+  try {
+    deleteFeature.run({ id: parseInt(req.params.featureId) });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:id/features/:featureId/promote', async (req, res) => {
+  try {
+    const project = getProjectById.get({ id: req.params.id });
+    if (!project || !project.trello_board_id) return res.status(400).json({ error: 'Project has no linked Trello board' });
+    const feature = getFeatureById.get({ id: parseInt(req.params.featureId) });
+    if (!feature) return res.status(404).json({ error: 'Feature not found' });
+
+    // Find the "Doing" list on the board
+    const boards = await getAllBoards();
+    const board = boards.boards.find(b => b.id === project.trello_board_id);
+    if (!board) return res.status(404).json({ error: 'Trello board not found' });
+    const doingList = board.lists.find(l => l.name.toLowerCase().includes('doing') || l.name.toLowerCase().includes('in progress'));
+    if (!doingList) return res.status(404).json({ error: 'No "Doing" list found on board' });
+
+    const card = await createCard(doingList.id, feature.name, feature.description || '');
+    updateFeature.run({
+      id: feature.id,
+      name: null, description: null, status: 'building', version_target: null,
+      version_shipped: null, tags: null, priority: null, source: null,
+      trello_card_id: card.id
+    });
+    const updated = getFeatureById.get({ id: feature.id });
+    res.json({ feature: updated, card });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Project Tags
+app.get('/api/projects/:id/tags', (req, res) => {
+  try {
+    const tags = getTagsByProject.all({ project_id: req.params.id });
+    res.json(tags);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:id/tags', (req, res) => {
+  try {
+    const { name, color, description } = req.body;
+    if (!name) return res.status(400).json({ error: 'name required' });
+    const result = insertProjectTag.run({
+      project_id: req.params.id,
+      name,
+      color: color || null,
+      description: description || null
+    });
+    const tag = getProjectTagById.get({ id: result.lastInsertRowid });
+    res.json(tag);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/projects/:id/tags/:tagId', (req, res) => {
+  try {
+    const { name, color, description } = req.body;
+    updateProjectTag.run({
+      id: parseInt(req.params.tagId),
+      name: name !== undefined ? name : null,
+      color: color !== undefined ? color : null,
+      description: description !== undefined ? description : null
+    });
+    const tag = getProjectTagById.get({ id: parseInt(req.params.tagId) });
+    res.json(tag);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:id/tags/:tagId', (req, res) => {
+  try {
+    deleteProjectTag.run({ id: parseInt(req.params.tagId) });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Feedback
+app.get('/api/projects/:id/feedback', (req, res) => {
+  try {
+    const feedback = getFeedbackByProject.all({ project_id: req.params.id });
+    res.json(feedback);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:id/feedback', (req, res) => {
+  try {
+    const { source, content, sentiment, linked_feature_id } = req.body;
+    if (!content) return res.status(400).json({ error: 'content required' });
+    const result = insertFeedback.run({
+      project_id: req.params.id,
+      source: source || null,
+      content,
+      sentiment: sentiment || null,
+      linked_feature_id: linked_feature_id || null
+    });
+    const fb = getFeedbackById.get({ id: result.lastInsertRowid });
+    res.json(fb);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/projects/:id/feedback/:feedbackId', (req, res) => {
+  try {
+    const { source, content, sentiment, linked_feature_id } = req.body;
+    updateFeedback.run({
+      id: parseInt(req.params.feedbackId),
+      source: source !== undefined ? source : null,
+      content: content !== undefined ? content : null,
+      sentiment: sentiment !== undefined ? sentiment : null,
+      linked_feature_id: linked_feature_id !== undefined ? linked_feature_id : null
+    });
+    const fb = getFeedbackById.get({ id: parseInt(req.params.feedbackId) });
+    res.json(fb);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:id/feedback/:feedbackId', (req, res) => {
+  try {
+    deleteFeedback.run({ id: parseInt(req.params.feedbackId) });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

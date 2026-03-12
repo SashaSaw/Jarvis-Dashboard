@@ -241,6 +241,84 @@ const deleteDocument = db.prepare(`DELETE FROM documents WHERE id = @id`);
 // --- Action Log ---
 
 db.exec(`
+  -- Project Hub tables
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    tagline TEXT,
+    icon TEXT,
+    status TEXT DEFAULT 'active',
+    platform TEXT,
+    tech_stack TEXT,
+    current_version TEXT,
+    next_version TEXT,
+    release_date TEXT,
+    category TEXT,
+    app_store_url TEXT,
+    github_url TEXT,
+    landing_url TEXT,
+    trello_board_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS project_sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    section_type TEXT NOT NULL,
+    title TEXT,
+    content TEXT,
+    sort_order INTEGER DEFAULT 0,
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_psections_project ON project_sections(project_id);
+
+  CREATE TABLE IF NOT EXISTS features (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'idea',
+    version_target TEXT,
+    version_shipped TEXT,
+    tags TEXT,
+    priority TEXT DEFAULT 'normal',
+    source TEXT,
+    trello_card_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_id);
+
+  -- Migration: add prompt column if missing
+  `);
+  try { db.exec(`ALTER TABLE features ADD COLUMN prompt TEXT`); } catch(e) { /* already exists */ }
+  db.exec(`
+
+  CREATE TABLE IF NOT EXISTS project_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT,
+    description TEXT,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ptags_project ON project_tags(project_id);
+
+  CREATE TABLE IF NOT EXISTS project_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    source TEXT,
+    content TEXT NOT NULL,
+    sentiment TEXT,
+    linked_feature_id INTEGER,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pfeedback_project ON project_feedback(project_id);
+
   CREATE TABLE IF NOT EXISTS action_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent TEXT NOT NULL,
@@ -289,6 +367,146 @@ const getLogTopActions = db.prepare(`
   LIMIT 10
 `);
 
+// --- Projects ---
+
+const insertProject = db.prepare(`
+  INSERT INTO projects (id, name, tagline, icon, status, platform, tech_stack, current_version, next_version, release_date, category, app_store_url, github_url, landing_url, trello_board_id)
+  VALUES (@id, @name, @tagline, @icon, @status, @platform, @tech_stack, @current_version, @next_version, @release_date, @category, @app_store_url, @github_url, @landing_url, @trello_board_id)
+`);
+
+const getProjects = db.prepare(`SELECT * FROM projects ORDER BY name ASC`);
+
+const getProjectById = db.prepare(`SELECT * FROM projects WHERE id = @id`);
+
+const updateProject = db.prepare(`
+  UPDATE projects SET
+    name = COALESCE(@name, name),
+    tagline = COALESCE(@tagline, tagline),
+    icon = COALESCE(@icon, icon),
+    status = COALESCE(@status, status),
+    platform = COALESCE(@platform, platform),
+    tech_stack = COALESCE(@tech_stack, tech_stack),
+    current_version = COALESCE(@current_version, current_version),
+    next_version = COALESCE(@next_version, next_version),
+    release_date = COALESCE(@release_date, release_date),
+    category = COALESCE(@category, category),
+    app_store_url = COALESCE(@app_store_url, app_store_url),
+    github_url = COALESCE(@github_url, github_url),
+    landing_url = COALESCE(@landing_url, landing_url),
+    trello_board_id = COALESCE(@trello_board_id, trello_board_id),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const archiveProject = db.prepare(`UPDATE projects SET status = 'archived', updated_at = datetime('now') WHERE id = @id`);
+const deleteProjectPermanent = db.prepare(`DELETE FROM projects WHERE id = @id AND status = 'archived'`);
+const deleteProjectSections = db.prepare(`DELETE FROM project_sections WHERE project_id = @project_id`);
+const deleteProjectFeatures = db.prepare(`DELETE FROM features WHERE project_id = @project_id`);
+const deleteProjectTags = db.prepare(`DELETE FROM project_tags WHERE project_id = @project_id`);
+const deleteProjectFeedback = db.prepare(`DELETE FROM project_feedback WHERE project_id = @project_id`);
+
+// --- Project Sections ---
+
+const insertSection = db.prepare(`
+  INSERT INTO project_sections (project_id, section_type, title, content, sort_order)
+  VALUES (@project_id, @section_type, @title, @content, @sort_order)
+`);
+
+const getSectionsByProject = db.prepare(`
+  SELECT * FROM project_sections WHERE project_id = @project_id ORDER BY sort_order ASC
+`);
+
+const getSectionById = db.prepare(`SELECT * FROM project_sections WHERE id = @id`);
+
+const updateSection = db.prepare(`
+  UPDATE project_sections SET
+    title = COALESCE(@title, title),
+    content = COALESCE(@content, content),
+    sort_order = COALESCE(@sort_order, sort_order),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const deleteSection = db.prepare(`DELETE FROM project_sections WHERE id = @id`);
+
+// --- Features ---
+
+const insertFeature = db.prepare(`
+  INSERT INTO features (project_id, name, description, status, version_target, version_shipped, tags, priority, source, trello_card_id, prompt)
+  VALUES (@project_id, @name, @description, @status, @version_target, @version_shipped, @tags, @priority, @source, @trello_card_id, @prompt)
+`);
+
+const getFeaturesByProject = db.prepare(`
+  SELECT * FROM features WHERE project_id = @project_id ORDER BY created_at DESC
+`);
+
+const getFeatureById = db.prepare(`SELECT * FROM features WHERE id = @id`);
+
+const updateFeature = db.prepare(`
+  UPDATE features SET
+    name = COALESCE(@name, name),
+    description = COALESCE(@description, description),
+    status = COALESCE(@status, status),
+    version_target = COALESCE(@version_target, version_target),
+    version_shipped = COALESCE(@version_shipped, version_shipped),
+    tags = COALESCE(@tags, tags),
+    priority = COALESCE(@priority, priority),
+    source = COALESCE(@source, source),
+    trello_card_id = COALESCE(@trello_card_id, trello_card_id),
+    prompt = COALESCE(@prompt, prompt),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const deleteFeature = db.prepare(`DELETE FROM features WHERE id = @id`);
+
+// --- Project Tags ---
+
+const insertProjectTag = db.prepare(`
+  INSERT INTO project_tags (project_id, name, color, description)
+  VALUES (@project_id, @name, @color, @description)
+`);
+
+const getTagsByProject = db.prepare(`
+  SELECT * FROM project_tags WHERE project_id = @project_id ORDER BY name ASC
+`);
+
+const getProjectTagById = db.prepare(`SELECT * FROM project_tags WHERE id = @id`);
+
+const updateProjectTag = db.prepare(`
+  UPDATE project_tags SET
+    name = COALESCE(@name, name),
+    color = COALESCE(@color, color),
+    description = COALESCE(@description, description)
+  WHERE id = @id
+`);
+
+const deleteProjectTag = db.prepare(`DELETE FROM project_tags WHERE id = @id`);
+
+// --- Project Feedback ---
+
+const insertFeedback = db.prepare(`
+  INSERT INTO project_feedback (project_id, source, content, sentiment, linked_feature_id)
+  VALUES (@project_id, @source, @content, @sentiment, @linked_feature_id)
+`);
+
+const getFeedbackByProject = db.prepare(`
+  SELECT * FROM project_feedback WHERE project_id = @project_id ORDER BY created_at DESC
+`);
+
+const getFeedbackById = db.prepare(`SELECT * FROM project_feedback WHERE id = @id`);
+
+const updateFeedback = db.prepare(`
+  UPDATE project_feedback SET
+    source = COALESCE(@source, source),
+    content = COALESCE(@content, content),
+    sentiment = COALESCE(@sentiment, sentiment),
+    linked_feature_id = @linked_feature_id
+  WHERE id = @id
+`);
+
+const deleteFeedback = db.prepare(`DELETE FROM project_feedback WHERE id = @id`);
+
 module.exports = {
   db,
   insertEvent,
@@ -318,5 +536,36 @@ module.exports = {
   insertLogEntry,
   getLogEntries,
   getLogStats,
-  getLogTopActions
+  getLogTopActions,
+  // Project Hub
+  insertProject,
+  getProjects,
+  getProjectById,
+  updateProject,
+  archiveProject,
+  deleteProjectPermanent,
+  deleteProjectSections,
+  deleteProjectFeatures,
+  deleteProjectTags,
+  deleteProjectFeedback,
+  insertSection,
+  getSectionsByProject,
+  getSectionById,
+  updateSection,
+  deleteSection,
+  insertFeature,
+  getFeaturesByProject,
+  getFeatureById,
+  updateFeature,
+  deleteFeature,
+  insertProjectTag,
+  getTagsByProject,
+  getProjectTagById,
+  updateProjectTag,
+  deleteProjectTag,
+  insertFeedback,
+  getFeedbackByProject,
+  getFeedbackById,
+  updateFeedback,
+  deleteFeedback
 };

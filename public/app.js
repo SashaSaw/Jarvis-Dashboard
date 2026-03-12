@@ -1892,23 +1892,928 @@ function openKanbanTaskEdit(id) {
   });
 }
 
-// ===== VIEW: PROJECTS =====
+// ===== VIEW: PROJECTS (Project Hub) =====
+
+let projectHubState = {
+  projects: [],
+  selectedId: null,
+  projectData: null,
+  featureFilter: 'all',
+  featureGroupBy: 'status',
+  collapsedSections: {},
+  editingSection: null,
+  editingFeature: null
+};
+
+const FEATURE_STATUSES = [
+  { key: 'idea', label: '💡 Ideas', color: '#f59e0b' },
+  { key: 'defined', label: '📋 Defined', color: '#3b82f6' },
+  { key: 'building', label: '🏗️ Building', color: '#8b5cf6' },
+  { key: 'shipped', label: '✅ Shipped', color: '#10b981' }
+];
+
+const SECTION_ICONS = {
+  concept: '💭', tech: '⚙️', marketing: '📣', feedback_intro: '💬',
+  flows: '🔀', kanban: '📋'
+};
+
+const PROJECT_STATUS_COLORS = {
+  active: '#10b981', paused: '#f59e0b', archived: '#6b7280'
+};
 
 async function renderProjects(container) {
   container.innerHTML = `
-    <div class="view-container">
-      <div class="card projects-full">
-        <div class="card-header">
-          <div class="project-tabs" id="project-tabs"></div>
-          <button class="btn-refresh" onclick="refreshProjects()" title="Refresh">↻</button>
+    <div class="view-container project-hub">
+      <div class="project-hub-topbar" id="project-hub-topbar">
+        <div class="project-switcher" id="project-switcher">
+          <button class="project-switcher-btn" id="project-switcher-btn" onclick="toggleProjectDropdown()">
+            <span id="project-switcher-label">Loading...</span>
+            <span class="project-switcher-chevron">▾</span>
+          </button>
+          <div class="project-dropdown" id="project-dropdown"></div>
         </div>
-        <div id="board-container" class="board-container">
-          <div class="loading"><div class="spinner"></div> Loading projects...</div>
+      </div>
+      <div class="project-hub-content" id="project-hub-content">
+        <div class="docs-empty-state" style="padding:3rem;text-align:center">
+          <div class="placeholder-icon">📁</div>
+          <div class="placeholder-text">Select a project</div>
+          <div class="placeholder-sub">Or wait for projects to be created</div>
         </div>
       </div>
     </div>
   `;
-  refreshProjects();
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    const dd = document.getElementById('project-dropdown');
+    const btn = document.getElementById('project-switcher-btn');
+    if (dd && !dd.contains(e.target) && !btn?.contains(e.target)) {
+      dd.classList.remove('open');
+    }
+  });
+  await loadProjectsList();
+}
+
+async function loadProjectsList() {
+  const projects = await fetchJSON('/api/projects');
+  projectHubState.projects = projects || [];
+  renderProjectTabs();
+  if (projectHubState.projects.length > 0 && !projectHubState.selectedId) {
+    selectProject(projectHubState.projects[0].id);
+  } else if (projectHubState.selectedId) {
+    selectProject(projectHubState.selectedId);
+  }
+}
+
+function renderProjectTabs() {
+  const projects = projectHubState.projects;
+  const selected = projects.find(p => p.id === projectHubState.selectedId);
+
+  // Update switcher button label
+  const label = document.getElementById('project-switcher-label');
+  if (label) {
+    if (selected) {
+      label.innerHTML = `${selected.icon || '📁'} ${escapeHtml(selected.name)}`;
+    } else if (!projects.length) {
+      label.textContent = 'No projects';
+    } else {
+      label.textContent = 'Select project...';
+    }
+  }
+
+  // Build dropdown
+  const dd = document.getElementById('project-dropdown');
+  if (!dd) return;
+  const active = projects.filter(p => p.status !== 'archived');
+  const archived = projects.filter(p => p.status === 'archived');
+
+  let html = '';
+  if (active.length) {
+    html += active.map(p => `
+      <div class="project-dropdown-item ${p.id === projectHubState.selectedId ? 'active' : ''}" onclick="selectProject('${p.id}'); closeProjectDropdown()">
+        <span class="project-dropdown-icon">${p.icon || '📁'}</span>
+        <span class="project-dropdown-name">${escapeHtml(p.name)}</span>
+        <span class="project-dropdown-status" style="background:${PROJECT_STATUS_COLORS[p.status] || '#6b7280'}">${p.status}</span>
+      </div>
+    `).join('');
+  }
+  if (archived.length) {
+    html += `<div class="project-dropdown-divider">📦 Archived</div>`;
+    html += archived.map(p => `
+      <div class="project-dropdown-item archived ${p.id === projectHubState.selectedId ? 'active' : ''}" onclick="selectProject('${p.id}'); closeProjectDropdown()">
+        <span class="project-dropdown-icon">${p.icon || '📁'}</span>
+        <span class="project-dropdown-name">${escapeHtml(p.name)}</span>
+        <span class="project-dropdown-status" style="background:${PROJECT_STATUS_COLORS[p.status] || '#6b7280'}">${p.status}</span>
+      </div>
+    `).join('');
+  }
+  dd.innerHTML = html;
+}
+
+function toggleProjectDropdown() {
+  document.getElementById('project-dropdown')?.classList.toggle('open');
+}
+
+function closeProjectDropdown() {
+  document.getElementById('project-dropdown')?.classList.remove('open');
+}
+
+async function selectProject(id) {
+  projectHubState.selectedId = id;
+  renderProjectTabs();
+  const content = document.getElementById('project-hub-content');
+  if (content) content.innerHTML = '<div class="loading"><div class="spinner"></div> Loading project...</div>';
+  const data = await fetchJSON(`/api/projects/${id}`);
+  if (!data || data.error) {
+    if (content) content.innerHTML = `<div class="empty-state">Failed to load project</div>`;
+    return;
+  }
+  projectHubState.projectData = data;
+  renderProjectHub();
+}
+
+function renderProjectHub() {
+  const content = document.getElementById('project-hub-content');
+  if (!content) return;
+  const p = projectHubState.projectData;
+  if (!p) return;
+
+  const sections = p.sections || [];
+  const getSection = (type) => sections.find(s => s.section_type === type);
+
+  content.innerHTML = `
+    ${renderProjectHeader(p)}
+    ${renderProjectSection('concept', 'Concept & Definition', getSection('concept'), p.id)}
+    ${renderFeatureMap(p)}
+    ${renderProjectKanban(p)}
+    ${renderProjectSection('feedback_intro', 'User Feedback', getSection('feedback_intro'), p.id)}
+    ${renderFeedbackList(p)}
+    ${renderProjectSection('marketing', 'Marketing', getSection('marketing'), p.id)}
+    ${renderProjectSection('flows', 'App Flows', getSection('flows'), p.id)}
+    ${renderProjectSection('tech', 'Tech Stack', getSection('tech'), p.id)}
+  `;
+
+  // Load kanban if board linked
+  if (p.trello_board_id) {
+    loadProjectKanban(p.trello_board_id);
+  }
+}
+
+function getProjectCompleteness(p) {
+  const checks = [
+    { label: 'Tagline', done: !!p.tagline },
+    { label: 'Concept defined', done: !!(p.sections || []).find(s => s.section_type === 'concept' && s.content && s.content.trim().length > 20) },
+    { label: 'Tech stack', done: !!(p.sections || []).find(s => s.section_type === 'tech' && s.content && s.content.trim().length > 20) },
+    { label: 'Marketing plan', done: !!(p.sections || []).find(s => s.section_type === 'marketing' && s.content && s.content.trim().length > 20) },
+    { label: 'App flows', done: !!(p.sections || []).find(s => s.section_type === 'flows' && s.content && s.content.trim().length > 20) },
+    { label: 'Features defined', done: (p.features || []).length >= 3 },
+    { label: 'User feedback', done: (p.feedback || []).length >= 1 },
+    { label: 'App Store / GitHub link', done: !!(p.app_store_url || p.github_url) },
+    { label: 'Version set', done: !!p.current_version || !!p.next_version },
+    { label: 'Platform & category', done: !!(p.platform && p.category) },
+  ];
+  const done = checks.filter(c => c.done).length;
+  const total = checks.length;
+  const pct = Math.round((done / total) * 100);
+  return { checks, done, total, pct };
+}
+
+function renderProjectHeader(p) {
+  const statusColor = PROJECT_STATUS_COLORS[p.status] || '#6b7280';
+  const versionInfo = [];
+  if (p.current_version) {
+    let v = `v${p.current_version}`;
+    if (p.release_date) v += ` (${p.release_date})`;
+    versionInfo.push(v);
+  }
+  if (p.next_version) versionInfo.push(`→ v${p.next_version} next`);
+
+  const links = [];
+  if (p.app_store_url) links.push(`<a href="${p.app_store_url}" target="_blank" class="project-link-btn">🏪 App Store</a>`);
+  if (p.github_url) links.push(`<a href="${p.github_url}" target="_blank" class="project-link-btn">🐙 GitHub</a>`);
+  if (p.landing_url) links.push(`<a href="${p.landing_url}" target="_blank" class="project-link-btn">🌐 Website</a>`);
+
+  const comp = getProjectCompleteness(p);
+  let barClass = '';
+  if (comp.pct >= 80) barClass = 'complete';
+  else if (comp.pct >= 50) barClass = 'partial';
+  else barClass = 'low';
+
+  const missingItems = comp.checks.filter(c => !c.done);
+
+  return `
+    <div class="project-header-card">
+      <div class="project-header-top">
+        <div class="project-header-identity">
+          ${p.icon ? `<span class="project-header-icon">${p.icon}</span>` : ''}
+          <div>
+            <h1 class="project-header-name">${escapeHtml(p.name)}</h1>
+            ${p.tagline ? `<div class="project-header-tagline">${escapeHtml(p.tagline)}</div>` : ''}
+          </div>
+        </div>
+        <div class="project-header-actions">
+          <span class="project-status-badge" style="background:${statusColor}">${p.status}</span>
+          <button class="btn-doc-action" onclick="openProjectEditModal('${p.id}')">✏️ Edit</button>
+          ${p.status !== 'archived' ? `<button class="btn-archive" onclick="archiveProject('${p.id}')">📦 Archive</button>` : `<button class="btn-move" onclick="restoreProject('${p.id}')">♻️ Restore</button><button class="btn-archive" style="color:#ef4444" onclick="permanentDeleteProject('${p.id}')">🗑 Delete</button>`}
+        </div>
+      </div>
+      <div class="project-header-meta">
+        ${versionInfo.length ? `<span class="project-meta-item">📦 ${versionInfo.join(' ')}</span>` : ''}
+        ${p.platform ? `<span class="project-meta-item">📱 ${escapeHtml(p.platform)}</span>` : ''}
+        ${p.category ? `<span class="project-meta-item">🏷️ ${escapeHtml(p.category)}</span>` : ''}
+        ${p.tech_stack ? `<span class="project-meta-item">⚙️ ${escapeHtml(p.tech_stack)}</span>` : ''}
+      </div>
+      ${links.length ? `<div class="project-header-links">${links.join('')}</div>` : ''}
+      <div class="project-completeness">
+        <div class="project-completeness-header">
+          <span class="project-completeness-label">Project completeness</span>
+          <span class="project-completeness-pct">${comp.done}/${comp.total} (${comp.pct}%)</span>
+        </div>
+        <div class="project-completeness-bar">
+          <div class="project-completeness-fill ${barClass}" style="width:${comp.pct}%"></div>
+        </div>
+        ${missingItems.length > 0 ? `
+          <div class="project-completeness-missing">
+            ${missingItems.map(m => `<span class="project-missing-item">⚠️ ${m.label}</span>`).join('')}
+          </div>
+        ` : `<div class="project-completeness-done">✅ All sections complete!</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderProjectSection(type, title, section, projectId) {
+  const icon = SECTION_ICONS[type] || '📄';
+  const isCollapsed = projectHubState.collapsedSections[type];
+  const isEditing = projectHubState.editingSection === (section ? section.id : `new-${type}`);
+  const content = section ? section.content : '';
+
+  return `
+    <div class="project-section-card">
+      <div class="project-section-header" onclick="toggleProjectSection('${type}')">
+        <span class="project-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+        <span class="project-section-icon">${icon}</span>
+        <span class="project-section-title">${title}</span>
+        <button class="btn-doc-action" onclick="event.stopPropagation(); editProjectSection('${type}', ${section ? section.id : 'null'}, '${projectId}')" style="margin-left:auto">✏️</button>
+      </div>
+      ${!isCollapsed ? `
+        <div class="project-section-body">
+          ${isEditing ? `
+            <textarea class="project-section-textarea" id="section-edit-${type}">${escapeHtml(content || '')}</textarea>
+            <div class="project-section-edit-actions">
+              <button class="btn-move" onclick="saveProjectSection('${type}', ${section ? section.id : 'null'}, '${projectId}')">Save</button>
+              <button class="btn-archive" onclick="cancelSectionEdit()">Cancel</button>
+            </div>
+          ` : content ? `<div class="markdown-body">${renderMarkdown(content)}</div>` : `<div class="project-section-empty">No content yet. Click ✏️ to add.</div>`}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function toggleProjectSection(type) {
+  projectHubState.collapsedSections[type] = !projectHubState.collapsedSections[type];
+  renderProjectHub();
+}
+
+function editProjectSection(type, sectionId, projectId) {
+  projectHubState.editingSection = sectionId || `new-${type}`;
+  renderProjectHub();
+  const ta = document.getElementById(`section-edit-${type}`);
+  if (ta) ta.focus();
+}
+
+function cancelSectionEdit() {
+  projectHubState.editingSection = null;
+  renderProjectHub();
+}
+
+async function saveProjectSection(type, sectionId, projectId) {
+  const ta = document.getElementById(`section-edit-${type}`);
+  if (!ta) return;
+  const content = ta.value;
+
+  if (sectionId && sectionId !== 'null') {
+    await fetchJSON(`/api/projects/${projectId}/sections/${sectionId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+  } else {
+    await fetchJSON(`/api/projects/${projectId}/sections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ section_type: type, title: type, content })
+    });
+  }
+  projectHubState.editingSection = null;
+  selectProject(projectId);
+}
+
+// --- Feature Map ---
+
+function renderFeatureMap(p) {
+  const features = p.features || [];
+  const tags = p.tags || [];
+  const isCollapsed = projectHubState.collapsedSections['featuremap'];
+
+  // Get distinct versions
+  const versions = [...new Set(features.map(f => f.version_target).filter(Boolean))].sort();
+
+  // Filter
+  let filtered = features;
+  if (projectHubState.featureFilter !== 'all') {
+    if (projectHubState.featureFilter === 'unassigned') {
+      filtered = features.filter(f => !f.version_target);
+    } else {
+      filtered = features.filter(f => f.version_target === projectHubState.featureFilter);
+    }
+  }
+
+  // Group
+  const groups = {};
+  const groupBy = projectHubState.featureGroupBy;
+  if (groupBy === 'status') {
+    for (const s of FEATURE_STATUSES) groups[s.key] = { label: s.label, color: s.color, items: [] };
+    for (const f of filtered) {
+      const key = f.status || 'idea';
+      if (!groups[key]) groups[key] = { label: key, color: '#6b7280', items: [] };
+      groups[key].items.push(f);
+    }
+  } else if (groupBy === 'version') {
+    groups['unassigned'] = { label: '📌 Unassigned', color: '#6b7280', items: [] };
+    for (const v of versions) groups[v] = { label: `📦 ${v}`, color: '#3b82f6', items: [] };
+    for (const f of filtered) {
+      const key = f.version_target || 'unassigned';
+      if (!groups[key]) groups[key] = { label: key, color: '#6b7280', items: [] };
+      groups[key].items.push(f);
+    }
+  } else if (groupBy === 'tags') {
+    groups['untagged'] = { label: '🏷️ Untagged', color: '#6b7280', items: [] };
+    for (const t of tags) groups[t.name] = { label: `🏷️ ${t.name}`, color: t.color || '#6b7280', items: [] };
+    for (const f of filtered) {
+      const fTags = f.tags ? f.tags.split(',').map(t => t.trim()) : [];
+      if (!fTags.length) { groups['untagged'].items.push(f); continue; }
+      for (const t of fTags) {
+        if (!groups[t]) groups[t] = { label: `🏷️ ${t}`, color: '#6b7280', items: [] };
+        groups[t].items.push(f);
+      }
+    }
+  }
+
+  // Build tag color map
+  const tagColorMap = {};
+  for (const t of tags) tagColorMap[t.name] = t.color || '#6b7280';
+
+  return `
+    <div class="project-section-card">
+      <div class="project-section-header" onclick="toggleProjectSection('featuremap')">
+        <span class="project-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+        <span class="project-section-icon">🗺️</span>
+        <span class="project-section-title">Feature Map</span>
+        <span class="tab-count" style="margin-left:0.5rem">${features.length}</span>
+        <button class="btn-doc-action" onclick="event.stopPropagation(); openNewFeatureModal('${p.id}')" style="margin-left:auto">+ New Feature</button>
+      </div>
+      ${!isCollapsed ? `
+        <div class="project-section-body">
+          <div class="feature-filter-bar">
+            <div class="feature-filter-versions">
+              <button class="feature-filter-btn ${projectHubState.featureFilter === 'all' ? 'active' : ''}" onclick="setFeatureFilter('all')">All</button>
+              ${versions.map(v => `<button class="feature-filter-btn ${projectHubState.featureFilter === v ? 'active' : ''}" onclick="setFeatureFilter('${v}')">${v}</button>`).join('')}
+              <button class="feature-filter-btn ${projectHubState.featureFilter === 'unassigned' ? 'active' : ''}" onclick="setFeatureFilter('unassigned')">Unassigned</button>
+            </div>
+            <select class="feature-group-select" onchange="setFeatureGroupBy(this.value)">
+              <option value="status" ${groupBy === 'status' ? 'selected' : ''}>Group by Status</option>
+              <option value="version" ${groupBy === 'version' ? 'selected' : ''}>Group by Version</option>
+              <option value="tags" ${groupBy === 'tags' ? 'selected' : ''}>Group by Tags</option>
+            </select>
+          </div>
+          <div class="feature-groups">
+            ${Object.entries(groups).map(([key, group]) => `
+              <div class="feature-group">
+                <div class="feature-group-header" style="border-left:3px solid ${group.color}">
+                  <span class="feature-group-label">${group.label}</span>
+                  <span class="feature-group-count">${group.items.length}</span>
+                </div>
+                <div class="feature-group-cards" data-feature-group="${escapeHtml(key)}" data-project-id="${p.id}"
+                     ondragover="featureDragOver(event)" ondragleave="featureDragLeave(event)" ondrop="featureDrop(event)">
+                  ${group.items.length ? group.items.map(f => renderFeatureCard(f, tagColorMap, p.id)).join('') : '<div class="feature-empty">No features</div>'}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderFeatureCard(f, tagColorMap, projectId) {
+  const fTags = f.tags ? f.tags.split(',').map(t => t.trim()) : [];
+  const primaryColor = fTags.length && tagColorMap[fTags[0]] ? tagColorMap[fTags[0]] : '#4b5563';
+  const statusInfo = FEATURE_STATUSES.find(s => s.key === f.status) || { label: f.status, color: '#6b7280' };
+  const priorityBadge = f.priority === 'high' ? '🟠' : f.priority === 'urgent' ? '🔴' : f.priority === 'low' ? '⚪' : '';
+
+  return `
+    <div class="feature-card" style="border-left:3px solid ${primaryColor}" draggable="true"
+         data-feature-id="${f.id}" data-feature-status="${f.status}"
+         ondragstart="featureDragStart(event, ${f.id}, '${projectId}')" ondragend="featureDragEnd(event)"
+         onclick="openFeatureEditModal(${f.id}, '${projectId}')">
+
+      <div class="feature-card-top">
+        <span class="feature-card-name">${escapeHtml(f.name)}</span>
+        ${priorityBadge ? `<span class="feature-priority">${priorityBadge}</span>` : ''}
+      </div>
+      ${f.description ? `<div class="feature-card-desc">${escapeHtml(f.description.length > 100 ? f.description.slice(0, 100) + '...' : f.description)}</div>` : ''}
+      <div class="feature-card-meta">
+        <span class="feature-status-badge" style="background:${statusInfo.color}20;color:${statusInfo.color}">${statusInfo.label}</span>
+        ${f.version_target ? `<span class="feature-version-badge">📦 ${f.version_target}</span>` : ''}
+        ${fTags.map(t => `<span class="feature-tag-pill" style="background:${tagColorMap[t] || '#6b7280'}30;color:${tagColorMap[t] || '#6b7280'}">${t}</span>`).join('')}
+        ${f.source ? `<span class="feature-source-label">via ${escapeHtml(f.source)}</span>` : ''}
+        ${f.prompt ? `<span class="feature-prompt-badge" title="Has Claude Code prompt">🤖</span>` : ''}
+      </div>
+      ${f.status === 'defined' && !f.trello_card_id ? `<button class="feature-promote-btn" onclick="event.stopPropagation(); promoteFeature(${f.id}, '${projectId}')">→ Promote to Kanban</button>` : ''}
+    </div>
+  `;
+}
+
+function setFeatureFilter(val) {
+  projectHubState.featureFilter = val;
+  renderProjectHub();
+}
+
+function setFeatureGroupBy(val) {
+  projectHubState.featureGroupBy = val;
+  renderProjectHub();
+}
+
+async function promoteFeature(featureId, projectId) {
+  if (!confirm('Promote this feature to a Trello card?')) return;
+  const result = await fetchJSON(`/api/projects/${projectId}/features/${featureId}/promote`, { method: 'POST' });
+  if (result && !result.error) {
+    selectProject(projectId);
+  } else {
+    alert('Failed to promote: ' + (result?.error || 'Unknown error'));
+  }
+}
+
+// --- Kanban Section ---
+
+function renderProjectKanban(p) {
+  const isCollapsed = projectHubState.collapsedSections['kanban'];
+  const hasTrello = !!p.trello_board_id;
+
+  return `
+    <div class="project-section-card">
+      <div class="project-section-header" onclick="toggleProjectSection('kanban')">
+        <span class="project-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+        <span class="project-section-icon">📋</span>
+        <span class="project-section-title">Kanban</span>
+      </div>
+      ${!isCollapsed ? `
+        <div class="project-section-body project-kanban-body">
+          ${hasTrello ? `
+            <div id="project-board-container" class="board-container">
+              <div class="loading"><div class="spinner"></div> Loading board...</div>
+            </div>
+          ` : `<div class="project-section-empty">No Trello board linked. Edit project to connect one.</div>`}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+async function loadProjectKanban(boardId) {
+  const data = await fetchJSON('/api/trello');
+  if (!data || !data.boards) return;
+  const board = data.boards.find(b => b.id === boardId);
+  if (!board) return;
+
+  // Re-use existing boardsData and renderBoard
+  boardsData = data;
+  const idx = data.boards.findIndex(b => b.id === boardId);
+  activeTab = idx >= 0 ? idx : 0;
+
+  const container = document.getElementById('project-board-container');
+  if (!container) return;
+
+  // Render directly into the project container
+  const oldContainer = document.getElementById('board-container');
+  // Temporarily set board-container to our project container
+  container.id = 'board-container';
+  renderBoard(board);
+  container.id = 'project-board-container';
+}
+
+// --- Feedback List ---
+
+function renderFeedbackList(p) {
+  const feedback = p.feedback || [];
+  if (!feedback.length && !projectHubState.collapsedSections['feedback_list']) {
+    // Just show add button within the feedback_intro section
+  }
+
+  const isCollapsed = projectHubState.collapsedSections['feedback_list'];
+  const sentimentColors = { positive: '#10b981', neutral: '#6b7280', negative: '#ef4444' };
+
+  return feedback.length || !isCollapsed ? `
+    <div class="project-section-card" style="margin-top:-0.5rem">
+      <div class="project-section-header" onclick="toggleProjectSection('feedback_list')">
+        <span class="project-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+        <span class="project-section-icon">📬</span>
+        <span class="project-section-title">Feedback Items</span>
+        <span class="tab-count" style="margin-left:0.5rem">${feedback.length}</span>
+        <button class="btn-doc-action" onclick="event.stopPropagation(); openNewFeedbackModal('${p.id}')" style="margin-left:auto">+ Add Feedback</button>
+      </div>
+      ${!isCollapsed ? `
+        <div class="project-section-body">
+          ${feedback.length ? feedback.map(fb => `
+            <div class="feedback-card" onclick="openFeedbackEditModal(${fb.id}, '${p.id}')">
+              <div class="feedback-card-top">
+                ${fb.source ? `<span class="feedback-source">${escapeHtml(fb.source)}</span>` : ''}
+                ${fb.sentiment ? `<span class="feedback-sentiment" style="color:${sentimentColors[fb.sentiment] || '#6b7280'}">${fb.sentiment === 'positive' ? '👍' : fb.sentiment === 'negative' ? '👎' : '😐'} ${fb.sentiment}</span>` : ''}
+                <span class="feedback-date">${timeAgo(fb.created_at)}</span>
+              </div>
+              <div class="feedback-content">${escapeHtml(fb.content)}</div>
+            </div>
+          `).join('') : '<div class="feature-empty">No feedback yet</div>'}
+        </div>
+      ` : ''}
+    </div>
+  ` : '';
+}
+
+// --- Modal: Edit Project ---
+
+function openProjectEditModal(projectId) {
+  const p = projectHubState.projectData;
+  if (!p) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'project-edit-modal';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3>Edit Project</h3>
+        <button class="modal-close" onclick="document.getElementById('project-edit-modal').remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field"><label>Name</label><input type="text" class="modal-input" id="pe-name" value="${escapeHtml(p.name)}"></div>
+        <div class="modal-field"><label>Tagline</label><input type="text" class="modal-input" id="pe-tagline" value="${escapeHtml(p.tagline || '')}"></div>
+        <div class="modal-field"><label>Icon (emoji)</label><input type="text" class="modal-input" id="pe-icon" value="${escapeHtml(p.icon || '')}" style="width:60px"></div>
+        <div class="modal-field"><label>Status</label>
+          <select class="modal-select" id="pe-status">
+            <option value="active" ${p.status === 'active' ? 'selected' : ''}>Active</option>
+            <option value="paused" ${p.status === 'paused' ? 'selected' : ''}>Paused</option>
+            <option value="archived" ${p.status === 'archived' ? 'selected' : ''}>Archived</option>
+          </select>
+        </div>
+        <div class="modal-field"><label>Platform</label><input type="text" class="modal-input" id="pe-platform" value="${escapeHtml(p.platform || '')}"></div>
+        <div class="modal-field"><label>Tech Stack</label><input type="text" class="modal-input" id="pe-techstack" value="${escapeHtml(p.tech_stack || '')}"></div>
+        <div class="modal-field"><label>Category</label><input type="text" class="modal-input" id="pe-category" value="${escapeHtml(p.category || '')}"></div>
+        <div class="modal-field" style="display:flex;gap:0.75rem">
+          <div style="flex:1"><label>Current Version</label><input type="text" class="modal-input" id="pe-curver" value="${escapeHtml(p.current_version || '')}"></div>
+          <div style="flex:1"><label>Next Version</label><input type="text" class="modal-input" id="pe-nextver" value="${escapeHtml(p.next_version || '')}"></div>
+        </div>
+        <div class="modal-field"><label>Release Date</label><input type="text" class="modal-input" id="pe-reldate" value="${escapeHtml(p.release_date || '')}"></div>
+        <div class="modal-field"><label>App Store URL</label><input type="text" class="modal-input" id="pe-appstore" value="${escapeHtml(p.app_store_url || '')}"></div>
+        <div class="modal-field"><label>GitHub URL</label><input type="text" class="modal-input" id="pe-github" value="${escapeHtml(p.github_url || '')}"></div>
+        <div class="modal-field"><label>Landing URL</label><input type="text" class="modal-input" id="pe-landing" value="${escapeHtml(p.landing_url || '')}"></div>
+        <div class="modal-field"><label>Trello Board ID</label><input type="text" class="modal-input" id="pe-trello" value="${escapeHtml(p.trello_board_id || '')}"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="saveProjectEdit('${projectId}')">Save</button>
+        <button class="btn-archive" onclick="document.getElementById('project-edit-modal').remove()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.style.display = 'flex';
+}
+
+async function saveProjectEdit(projectId) {
+  const body = {
+    name: document.getElementById('pe-name').value,
+    tagline: document.getElementById('pe-tagline').value || null,
+    icon: document.getElementById('pe-icon').value || null,
+    status: document.getElementById('pe-status').value,
+    platform: document.getElementById('pe-platform').value || null,
+    tech_stack: document.getElementById('pe-techstack').value || null,
+    category: document.getElementById('pe-category').value || null,
+    current_version: document.getElementById('pe-curver').value || null,
+    next_version: document.getElementById('pe-nextver').value || null,
+    release_date: document.getElementById('pe-reldate').value || null,
+    app_store_url: document.getElementById('pe-appstore').value || null,
+    github_url: document.getElementById('pe-github').value || null,
+    landing_url: document.getElementById('pe-landing').value || null,
+    trello_board_id: document.getElementById('pe-trello').value || null
+  };
+  await fetchJSON(`/api/projects/${projectId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  document.getElementById('project-edit-modal')?.remove();
+  selectProject(projectId);
+}
+
+async function archiveProject(projectId) {
+  if (!confirm('Archive this project? You can restore it later.')) return;
+  await fetchJSON(`/api/projects/${projectId}`, { method: 'DELETE' });
+  projectHubState.selectedId = null;
+  loadProjectsList();
+}
+
+async function restoreProject(projectId) {
+  await fetchJSON(`/api/projects/${projectId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'active' })
+  });
+  loadProjectsList();
+}
+
+async function permanentDeleteProject(projectId) {
+  if (!confirm('⚠️ PERMANENTLY delete this project and ALL its data (features, sections, tags, feedback)? This cannot be undone.')) return;
+  if (!confirm('Are you absolutely sure? This is irreversible.')) return;
+  await fetchJSON(`/api/projects/${projectId}/permanent`, { method: 'DELETE' });
+  projectHubState.selectedId = null;
+  loadProjectsList();
+}
+
+// --- Modal: Feature Edit/New ---
+
+function openNewFeatureModal(projectId) {
+  openFeatureModal(null, projectId);
+}
+
+async function openFeatureEditModal(featureId, projectId) {
+  const f = (projectHubState.projectData?.features || []).find(f => f.id === featureId);
+  if (!f) return;
+  openFeatureModal(f, projectId);
+}
+
+function openFeatureModal(feature, projectId) {
+  const f = feature || {};
+  const isNew = !feature;
+  const tags = projectHubState.projectData?.tags || [];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'feature-modal';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3>${isNew ? 'New Feature' : 'Edit Feature'}</h3>
+        <button class="modal-close" onclick="document.getElementById('feature-modal').remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field"><label>Name</label><input type="text" class="modal-input" id="fe-name" value="${escapeHtml(f.name || '')}"></div>
+        <div class="modal-field"><label>Description</label><textarea class="modal-textarea" id="fe-desc" rows="3">${escapeHtml(f.description || '')}</textarea></div>
+        <div class="modal-field"><label>Status</label>
+          <select class="modal-select" id="fe-status">
+            ${FEATURE_STATUSES.map(s => `<option value="${s.key}" ${f.status === s.key ? 'selected' : ''}>${s.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="modal-field" style="display:flex;gap:0.75rem">
+          <div style="flex:1"><label>Version Target</label><input type="text" class="modal-input" id="fe-vertarget" value="${escapeHtml(f.version_target || '')}"></div>
+          <div style="flex:1"><label>Version Shipped</label><input type="text" class="modal-input" id="fe-vershipped" value="${escapeHtml(f.version_shipped || '')}"></div>
+        </div>
+        <div class="modal-field"><label>Priority</label>
+          <select class="modal-select" id="fe-priority">
+            <option value="low" ${f.priority === 'low' ? 'selected' : ''}>Low</option>
+            <option value="normal" ${f.priority === 'normal' || !f.priority ? 'selected' : ''}>Normal</option>
+            <option value="high" ${f.priority === 'high' ? 'selected' : ''}>High</option>
+            <option value="urgent" ${f.priority === 'urgent' ? 'selected' : ''}>Urgent</option>
+          </select>
+        </div>
+        <div class="modal-field"><label>Tags (comma-separated)</label><input type="text" class="modal-input" id="fe-tags" value="${escapeHtml(f.tags || '')}"></div>
+        <div class="modal-field"><label>Source</label><input type="text" class="modal-input" id="fe-source" value="${escapeHtml(f.source || '')}" placeholder="e.g. user request, brainstorm, competitor"></div>
+        <div class="modal-field">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
+            <label style="margin:0">Claude Code Prompt</label>
+            ${f.prompt ? '<button class="prompt-copy-btn" onclick="copyFeaturePrompt(this)">📋 Copy</button>' : ''}
+          </div>
+          <textarea class="modal-textarea prompt-textarea" id="fe-prompt" rows="6" placeholder="Paste a detailed prompt for Claude Code to implement this feature...">${escapeHtml(f.prompt || '')}</textarea>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="saveFeatureModal(${f.id || 'null'}, '${projectId}')">${isNew ? 'Create' : 'Save'}</button>
+        ${!isNew ? `<button class="btn-archive" onclick="deleteFeatureModal(${f.id}, '${projectId}')">🗑 Delete</button>` : ''}
+        <button class="btn-archive" onclick="document.getElementById('feature-modal').remove()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.style.display = 'flex';
+}
+
+async function saveFeatureModal(featureId, projectId) {
+  const body = {
+    name: document.getElementById('fe-name').value,
+    description: document.getElementById('fe-desc').value || null,
+    status: document.getElementById('fe-status').value,
+    version_target: document.getElementById('fe-vertarget').value || null,
+    version_shipped: document.getElementById('fe-vershipped').value || null,
+    priority: document.getElementById('fe-priority').value,
+    tags: document.getElementById('fe-tags').value || null,
+    source: document.getElementById('fe-source').value || null,
+    prompt: document.getElementById('fe-prompt').value || null
+  };
+  if (!body.name) return alert('Name is required');
+
+  if (featureId) {
+    await fetchJSON(`/api/projects/${projectId}/features/${featureId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+  } else {
+    await fetchJSON(`/api/projects/${projectId}/features`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+  }
+  document.getElementById('feature-modal')?.remove();
+  selectProject(projectId);
+}
+
+// --- Feature drag-and-drop ---
+function featureDragStart(event, featureId, projectId) {
+  event.dataTransfer.setData('text/plain', JSON.stringify({ featureId, projectId }));
+  event.dataTransfer.effectAllowed = 'move';
+  event.currentTarget.style.opacity = '0.4';
+  // Highlight all drop targets
+  setTimeout(() => {
+    document.querySelectorAll('.feature-group-cards').forEach(g => g.classList.add('feature-drop-target'));
+  }, 0);
+}
+
+function featureDragEnd(event) {
+  event.currentTarget.style.opacity = '1';
+  document.querySelectorAll('.feature-group-cards').forEach(g => {
+    g.classList.remove('feature-drop-target', 'feature-drag-over');
+  });
+}
+
+function featureDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  event.currentTarget.classList.add('feature-drag-over');
+}
+
+function featureDragLeave(event) {
+  event.currentTarget.classList.remove('feature-drag-over');
+}
+
+async function featureDrop(event) {
+  event.preventDefault();
+  const target = event.currentTarget;
+  target.classList.remove('feature-drag-over');
+
+  const groupBy = projectHubState.featureGroupBy || 'status';
+  const groupKey = target.dataset.featureGroup;
+  const projectId = target.dataset.projectId;
+
+  let data;
+  try { data = JSON.parse(event.dataTransfer.getData('text/plain')); } catch(e) { return; }
+  const { featureId } = data;
+
+  // Determine what field to update based on groupBy
+  let updateBody = {};
+  if (groupBy === 'status') {
+    updateBody.status = groupKey;
+  } else if (groupBy === 'version') {
+    updateBody.version_target = groupKey === 'Unassigned' ? '' : groupKey;
+  } else if (groupBy === 'tags') {
+    updateBody.tags = groupKey === 'Untagged' ? '' : groupKey;
+  }
+
+  try {
+    await fetchJSON(`/api/projects/${projectId}/features/${featureId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updateBody)
+    });
+    selectProject(projectId);
+  } catch (err) {
+    console.error('Feature drop error:', err);
+  }
+}
+
+function copyFeaturePrompt(btn) {
+  const text = document.getElementById('fe-prompt')?.value;
+  if (!text) return;
+  // Use execCommand fallback for non-HTTPS contexts
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = '✅ Copied!';
+      setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
+    });
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
+  }
+}
+
+async function deleteFeatureModal(featureId, projectId) {
+  if (!confirm('Delete this feature?')) return;
+  await fetchJSON(`/api/projects/${projectId}/features/${featureId}`, { method: 'DELETE' });
+  document.getElementById('feature-modal')?.remove();
+  selectProject(projectId);
+}
+
+// --- Modal: Feedback ---
+
+function openNewFeedbackModal(projectId) {
+  openFeedbackModal(null, projectId);
+}
+
+function openFeedbackEditModal(fbId, projectId) {
+  const fb = (projectHubState.projectData?.feedback || []).find(f => f.id === fbId);
+  if (!fb) return;
+  openFeedbackModal(fb, projectId);
+}
+
+function openFeedbackModal(fb, projectId) {
+  const f = fb || {};
+  const isNew = !fb;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'feedback-modal';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3>${isNew ? 'Add Feedback' : 'Edit Feedback'}</h3>
+        <button class="modal-close" onclick="document.getElementById('feedback-modal').remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field"><label>Source</label><input type="text" class="modal-input" id="fb-source" value="${escapeHtml(f.source || '')}" placeholder="e.g. App Store, Reddit, Email"></div>
+        <div class="modal-field"><label>Content</label><textarea class="modal-textarea" id="fb-content" rows="4">${escapeHtml(f.content || '')}</textarea></div>
+        <div class="modal-field"><label>Sentiment</label>
+          <select class="modal-select" id="fb-sentiment">
+            <option value="">Unknown</option>
+            <option value="positive" ${f.sentiment === 'positive' ? 'selected' : ''}>👍 Positive</option>
+            <option value="neutral" ${f.sentiment === 'neutral' ? 'selected' : ''}>😐 Neutral</option>
+            <option value="negative" ${f.sentiment === 'negative' ? 'selected' : ''}>👎 Negative</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="saveFeedbackModal(${f.id || 'null'}, '${projectId}')">${isNew ? 'Add' : 'Save'}</button>
+        ${!isNew ? `<button class="btn-archive" onclick="deleteFeedbackModal(${f.id}, '${projectId}')">🗑 Delete</button>` : ''}
+        <button class="btn-archive" onclick="document.getElementById('feedback-modal').remove()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.style.display = 'flex';
+}
+
+async function saveFeedbackModal(fbId, projectId) {
+  const body = {
+    source: document.getElementById('fb-source').value || null,
+    content: document.getElementById('fb-content').value,
+    sentiment: document.getElementById('fb-sentiment').value || null
+  };
+  if (!body.content) return alert('Content is required');
+
+  if (fbId) {
+    await fetchJSON(`/api/projects/${projectId}/feedback/${fbId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+  } else {
+    await fetchJSON(`/api/projects/${projectId}/feedback`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+  }
+  document.getElementById('feedback-modal')?.remove();
+  selectProject(projectId);
+}
+
+async function deleteFeedbackModal(fbId, projectId) {
+  if (!confirm('Delete this feedback?')) return;
+  await fetchJSON(`/api/projects/${projectId}/feedback/${fbId}`, { method: 'DELETE' });
+  document.getElementById('feedback-modal')?.remove();
+  selectProject(projectId);
+}
+
+// Legacy refreshProjects for Trello-only board view (used by kanban section)
+async function refreshProjects() {
+  boardsData = await fetchJSON('/api/trello');
+  if (boardsData && boardsData.boards && document.getElementById('board-container')) {
+    renderTabs(boardsData.boards);
+    renderBoard(boardsData.boards[activeTab]);
+  }
 }
 
 // ===== VIEW: DOCS =====
