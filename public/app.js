@@ -130,6 +130,49 @@ function navigate(view) {
   location.hash = '#' + view;
 }
 
+// ===== MOBILE SIDEBAR =====
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  const isOpen = sidebar.classList.contains('open');
+  if (isOpen) {
+    closeSidebar();
+  } else {
+    sidebar.classList.add('open');
+    backdrop.classList.add('visible');
+  }
+}
+
+function closeSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  sidebar.classList.remove('open');
+  backdrop.classList.remove('visible');
+}
+
+// Page name mapping for mobile top bar
+const VIEW_NAMES = {
+  overview: 'Overview',
+  schedule: 'Schedule',
+  inbox: 'Inbox',
+  kanban: 'Kanban',
+  projects: 'Projects',
+  docs: 'Docs',
+  log: 'Activity Log'
+};
+
+function updateMobilePageName() {
+  const el = document.getElementById('mobile-topbar-page');
+  if (!el) return;
+  if (currentView.startsWith('agent/')) {
+    const name = currentView.split('/')[1];
+    el.textContent = name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
+  } else {
+    el.textContent = VIEW_NAMES[currentView] || currentView;
+  }
+}
+
 function updateNav() {
   document.querySelectorAll('.nav-link').forEach(link => {
     const v = link.dataset.view;
@@ -139,11 +182,13 @@ function updateNav() {
   if (!currentView.startsWith('agent/')) {
     document.querySelectorAll('.sidebar-agent').forEach(el => el.classList.remove('sidebar-agent-active'));
   }
+  updateMobilePageName();
 }
 
 function route() {
   currentView = getView();
   updateNav();
+  closeSidebar();
   const main = document.getElementById('main-content');
 
   // Handle agent profile routes like #agent/jarvis
@@ -181,9 +226,9 @@ async function refreshAgentSidebar() {
 }
 
 // Make sidebar agent cards clickable
-document.getElementById('sidebar-agent-jarvis')?.addEventListener('click', () => navigate('agent/jarvis'));
-document.getElementById('sidebar-agent-klaus')?.addEventListener('click', () => navigate('agent/klaus'));
-document.getElementById('sidebar-agent-emily')?.addEventListener('click', () => navigate('agent/emily'));
+document.getElementById('sidebar-agent-jarvis')?.addEventListener('click', () => { navigate('agent/jarvis'); closeSidebar(); });
+document.getElementById('sidebar-agent-klaus')?.addEventListener('click', () => { navigate('agent/klaus'); closeSidebar(); });
+document.getElementById('sidebar-agent-emily')?.addEventListener('click', () => { navigate('agent/emily'); closeSidebar(); });
 
 function updateSidebarAgent(name, status) {
   const dot = document.getElementById(`agent-dot-${name}`);
@@ -280,6 +325,16 @@ async function renderOverview(container) {
           </div>
         </div>
 
+        <div class="card" id="heartbeat-card">
+          <div class="card-header">
+            <span class="card-title">💓 Heartbeat</span>
+            <span class="card-badge" id="heartbeat-badge" style="background:var(--text-muted);color:var(--bg-card)">...</span>
+          </div>
+          <div id="heartbeat-content">
+            <div class="loading"><div class="spinner"></div> Loading...</div>
+          </div>
+        </div>
+
         <div class="card deliverables-card" id="deliverables-card">
           <div class="card-header">
             <span class="card-title">🚀 Scheduled Deliverables</span>
@@ -308,7 +363,7 @@ async function renderOverview(container) {
 async function refreshOverviewData() {
   if (currentView !== 'overview') return;
 
-  const [stats, events, sessions, calendar, jarvis, klaus, emily, deliverables] = await Promise.all([
+  const [stats, events, sessions, calendar, jarvis, klaus, emily, deliverables, heartbeat] = await Promise.all([
     fetchJSON('/api/events/stats'),
     fetchJSON('/api/events?limit=50'),
     fetchJSON('/api/sessions/active'),
@@ -316,7 +371,8 @@ async function refreshOverviewData() {
     fetchJSON('/api/agent/jarvis/status'),
     fetchJSON('/api/agent/klaus/status'),
     fetchJSON('/api/agent/emily/status'),
-    fetchJSON('/api/scheduled-deliverables')
+    fetchJSON('/api/scheduled-deliverables'),
+    fetchJSON('/api/heartbeat-status')
   ]);
 
   if (currentView !== 'overview') return;
@@ -329,6 +385,7 @@ async function refreshOverviewData() {
   renderAgentStatus(emily, 'emily-status-content', 'emily-status-badge', 'Emily');
   renderCalendar(calendar);
   renderDeliverables(deliverables);
+  renderHeartbeat(heartbeat);
 }
 
 function renderStats(stats) {
@@ -608,6 +665,68 @@ function renderDeliverables(deliverables) {
   }).join('');
 }
 
+// ===== HEARTBEAT CARD =====
+
+function renderHeartbeat(hb) {
+  const el = document.getElementById('heartbeat-content');
+  const badge = document.getElementById('heartbeat-badge');
+  if (!el || !hb) return;
+
+  const isDormant = hb.dormant;
+  const status = !hb.enabled ? 'Disabled' : isDormant ? 'Dormant' : 'Active';
+  const statusColor = !hb.enabled ? 'var(--red)' : isDormant ? 'var(--text-muted)' : 'var(--green)';
+  const statusBg = !hb.enabled ? 'var(--red-dim)' : isDormant ? 'rgba(255,255,255,0.08)' : 'var(--green-dim)';
+
+  if (badge) {
+    badge.style.background = statusBg;
+    badge.style.color = statusColor;
+    badge.textContent = status;
+  }
+
+  // Config line
+  const model = (hb.model || 'unknown').split('/').pop();
+  const configLine = `Every ${hb.interval} · ${model} · ${hb.lightContext ? 'light context' : 'full context'}`;
+
+  // Active hours
+  let hoursLine = '';
+  if (hb.activeHours) {
+    const tz = (hb.activeHours.timezone || 'UTC').replace(/^.*\//, '');
+    hoursLine = `${hb.activeHours.start}–${hb.activeHours.end} ${tz}`;
+  }
+
+  // Timing line
+  let timingHtml = '';
+  if (hb.lastHeartbeat || hb.nextHeartbeat) {
+    const fmtTime = (iso) => {
+      if (!iso) return '—';
+      try {
+        const d = new Date(iso);
+        return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      } catch { return '—'; }
+    };
+    const last = fmtTime(hb.lastHeartbeat);
+    const next = isDormant ? 'dormant' : fmtTime(hb.nextHeartbeat);
+    timingHtml = `<div class="hb-timing">Last: <strong>${last}</strong> · Next: <strong>${next}</strong></div>`;
+  } else if (isDormant) {
+    timingHtml = `<div class="hb-timing">No heartbeats — HEARTBEAT.md is empty</div>`;
+  }
+
+  // Check items
+  let checksHtml = '';
+  if (hb.checkItems && hb.checkItems.length > 0) {
+    checksHtml = `<ul class="hb-checks">${hb.checkItems.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`;
+  } else if (isDormant) {
+    checksHtml = `<div class="hb-dormant-hint">Add tasks to HEARTBEAT.md to activate</div>`;
+  }
+
+  el.innerHTML = `
+    <div class="hb-config">${escapeHtml(configLine)}</div>
+    ${hoursLine ? `<div class="hb-hours">🕐 ${escapeHtml(hoursLine)}</div>` : ''}
+    ${timingHtml}
+    ${checksHtml}
+  `;
+}
+
 // ===== VIEW: SCHEDULE (Calendar/Schedule) =====
 
 // Calendar date helpers
@@ -660,7 +779,7 @@ function minutesToPx(mins, hourHeight) {
 
 const CAL_START_HOUR = 6;
 const CAL_END_HOUR = 23;
-const CAL_HOUR_HEIGHT = 60;
+const CAL_HOUR_HEIGHT = 80;
 
 async function renderSchedule(container) {
   // Clear previous time indicator interval
@@ -1518,6 +1637,9 @@ function closeTaskModal(e) {
 
 // ===== VIEW: KANBAN =====
 
+// Kanban state
+let kanbanArchiveExpanded = false;
+
 async function renderKanban(container) {
   container.innerHTML = `
     <div class="view-container">
@@ -1528,6 +1650,7 @@ async function renderKanban(container) {
       <div class="kanban-board" id="kanban-board">
         <div class="loading"><div class="spinner"></div> Loading...</div>
       </div>
+      <div class="kanban-archive-section" id="kanban-archive-section"></div>
     </div>
   `;
   refreshKanbanData();
@@ -1537,37 +1660,37 @@ async function refreshKanbanData() {
   if (currentView !== 'kanban') return;
   const tasks = await fetchJSON('/api/tasks?kanban=1');
   const el = document.getElementById('kanban-board');
+  const archiveEl = document.getElementById('kanban-archive-section');
   if (!el || currentView !== 'kanban') return;
 
-  const columns = [
+  const mainColumns = [
     { key: 'todo', name: 'To Do', tasks: [] },
     { key: 'in_progress', name: 'In Progress', tasks: [] },
-    { key: 'done', name: 'Done', tasks: [] },
-    { key: 'archived', name: 'Archive', tasks: [] }
+    { key: 'done', name: 'Done', tasks: [] }
   ];
 
+  const archiveTasks = [];
   const today = new Date().toISOString().slice(0, 10);
 
   if (tasks) {
     tasks.forEach(t => {
-      const col = columns.find(c => c.key === t.status);
-      if (col) {
-        // For archive, only show today's
-        if (t.status === 'archived') {
-          if (t.archived_at && t.archived_at.slice(0, 10) >= today) {
-            col.tasks.push(t);
-          }
-        } else {
-          col.tasks.push(t);
+      if (t.status === 'archived') {
+        if (t.archived_at && t.archived_at.slice(0, 10) >= today) {
+          archiveTasks.push(t);
         }
+      } else {
+        const col = mainColumns.find(c => c.key === t.status);
+        if (col) col.tasks.push(t);
       }
     });
   }
 
   const statusFlow = ['todo', 'in_progress', 'done', 'archived'];
+  const allColumns = [...mainColumns, { key: 'archived', name: 'Archive', tasks: archiveTasks }];
 
-  el.innerHTML = columns.map(col => `
-    <div class="kanban-column">
+  el.innerHTML = mainColumns.map(col => `
+    <div class="kanban-column" data-status="${col.key}"
+         ondragover="kanbanDragOver(event)" ondragleave="kanbanDragLeave(event)" ondrop="kanbanDrop(event, '${col.key}')">
       <div class="kanban-column-header">
         <span class="kanban-column-name">${col.name}</span>
         <span class="kanban-column-count">${col.tasks.length}</span>
@@ -1578,18 +1701,18 @@ async function refreshKanbanData() {
             const idx = statusFlow.indexOf(t.status);
             const canLeft = idx > 0;
             const canRight = idx < statusFlow.length - 1;
-            const isArchived = t.status === 'archived';
             return `
-              <div class="kanban-card ${isArchived ? 'archived' : ''}" onclick="openKanbanTaskEdit(${t.id})">
-                <div class="kanban-card-title">${escapeHtml(t.title)}</div>
+              <div class="kanban-card" draggable="true" data-task-id="${t.id}" data-task-status="${t.status}"
+                   ondragstart="kanbanDragStart(event, ${t.id})" ondragend="kanbanDragEnd(event)"
+                   onclick="openKanbanTaskEdit(${t.id})">
+                <div class="kanban-card-top">
+                  <div class="kanban-card-title">${escapeHtml(t.title)}</div>
+                  <button class="kanban-card-menu-btn" onclick="event.stopPropagation(); kanbanContextMenu(event, ${t.id}, '${t.status}')" title="Move card">⋮</button>
+                </div>
                 <div class="kanban-card-meta">
                   ${priorityBadgeHtml(t.priority)}
                   ${categoryTagHtml(t.category)}
                   <span class="kanban-card-time">${timeAgo(t.updated_at)}</span>
-                </div>
-                <div class="kanban-card-actions" onclick="event.stopPropagation()">
-                  ${canLeft ? `<button class="kanban-move-btn" onclick="moveKanbanTask(${t.id}, '${statusFlow[idx - 1]}')">◀ ${columns[idx - 1].name}</button>` : ''}
-                  ${canRight ? `<button class="kanban-move-btn" onclick="moveKanbanTask(${t.id}, '${statusFlow[idx + 1]}')">▶ ${columns[idx + 1].name}</button>` : ''}
                 </div>
               </div>
             `;
@@ -1597,6 +1720,154 @@ async function refreshKanbanData() {
       </div>
     </div>
   `).join('');
+
+  // Render collapsible archive section
+  if (archiveEl) {
+    archiveEl.innerHTML = `
+      <div class="kanban-archive-header ${kanbanArchiveExpanded ? 'expanded' : ''}" onclick="toggleKanbanArchive()">
+        <span class="kanban-archive-toggle">${kanbanArchiveExpanded ? '▼' : '▶'}</span>
+        <span class="kanban-archive-title">Archive</span>
+        <span class="kanban-column-count">${archiveTasks.length}</span>
+      </div>
+      ${kanbanArchiveExpanded ? `
+        <div class="kanban-archive-body" data-status="archived"
+             ondragover="kanbanDragOver(event)" ondragleave="kanbanDragLeave(event)" ondrop="kanbanDrop(event, 'archived')">
+          ${archiveTasks.length === 0 ? '<div class="empty-state" style="text-align:center;padding:1rem">No archived tasks today</div>' :
+            archiveTasks.map(t => `
+              <div class="kanban-card archived" draggable="true" data-task-id="${t.id}" data-task-status="archived"
+                   ondragstart="kanbanDragStart(event, ${t.id})" ondragend="kanbanDragEnd(event)"
+                   onclick="openKanbanTaskEdit(${t.id})">
+                <div class="kanban-card-top">
+                  <div class="kanban-card-title">${escapeHtml(t.title)}</div>
+                  <button class="kanban-card-menu-btn" onclick="event.stopPropagation(); kanbanContextMenu(event, ${t.id}, 'archived')" title="Move card">⋮</button>
+                </div>
+                <div class="kanban-card-meta">
+                  ${priorityBadgeHtml(t.priority)}
+                  ${categoryTagHtml(t.category)}
+                  <span class="kanban-card-time">${timeAgo(t.updated_at)}</span>
+                </div>
+              </div>
+            `).join('')}
+        </div>
+      ` : ''}
+    `;
+  }
+}
+
+function toggleKanbanArchive() {
+  kanbanArchiveExpanded = !kanbanArchiveExpanded;
+  refreshKanbanData();
+}
+
+// ===== KANBAN DRAG & DROP =====
+
+function kanbanDragStart(event, taskId) {
+  event.dataTransfer.setData('text/plain', taskId);
+  event.dataTransfer.effectAllowed = 'move';
+  event.target.classList.add('kanban-card-dragging');
+  // Highlight all drop targets
+  setTimeout(() => {
+    document.querySelectorAll('.kanban-column, .kanban-archive-body').forEach(col => col.classList.add('kanban-drop-target'));
+  }, 0);
+}
+
+function kanbanDragEnd(event) {
+  event.target.classList.remove('kanban-card-dragging');
+  document.querySelectorAll('.kanban-column, .kanban-archive-body').forEach(col => {
+    col.classList.remove('kanban-drop-target', 'kanban-drag-over');
+  });
+}
+
+function kanbanDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  const dropTarget = event.currentTarget;
+  dropTarget.classList.add('kanban-drag-over');
+}
+
+function kanbanDragLeave(event) {
+  // Only remove if actually leaving the column (not entering a child)
+  if (!event.currentTarget.contains(event.relatedTarget)) {
+    event.currentTarget.classList.remove('kanban-drag-over');
+  }
+}
+
+async function kanbanDrop(event, newStatus) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('kanban-drag-over');
+  const taskId = event.dataTransfer.getData('text/plain');
+  if (!taskId) return;
+  // Find current status from the card
+  const card = document.querySelector(`[data-task-id="${taskId}"]`);
+  const currentStatus = card ? card.dataset.taskStatus : null;
+  if (currentStatus === newStatus) return;
+  await moveKanbanTask(parseInt(taskId), newStatus);
+}
+
+// ===== KANBAN CONTEXT MENU =====
+
+function kanbanContextMenu(event, taskId, currentStatus) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  // Remove existing menu
+  const existing = document.getElementById('kanban-ctx-menu');
+  if (existing) existing.remove();
+
+  const allStatuses = [
+    { key: 'todo', name: 'To Do' },
+    { key: 'in_progress', name: 'In Progress' },
+    { key: 'done', name: 'Done' },
+    { key: 'archived', name: 'Archive' }
+  ];
+
+  const moveOptions = allStatuses.filter(s => s.key !== currentStatus);
+
+  const menu = document.createElement('div');
+  menu.id = 'kanban-ctx-menu';
+  menu.className = 'kanban-ctx-menu';
+  menu.innerHTML = `
+    <div class="kanban-ctx-header">Move to</div>
+    ${moveOptions.map(s => `
+      <div class="kanban-ctx-item" onclick="kanbanCtxMove(${taskId}, '${s.key}')">
+        ${s.name}
+      </div>
+    `).join('')}
+    ${currentStatus !== 'archived' ? `
+      <div class="kanban-ctx-divider"></div>
+      <div class="kanban-ctx-item kanban-ctx-archive" onclick="kanbanCtxMove(${taskId}, 'archived')">
+        📦 Archive
+      </div>
+    ` : ''}
+  `;
+
+  // Position at cursor
+  menu.style.left = event.clientX + 'px';
+  menu.style.top = event.clientY + 'px';
+  document.body.appendChild(menu);
+
+  // Adjust if overflowing viewport
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+  if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+
+  // Dismiss on click outside
+  setTimeout(() => {
+    document.addEventListener('click', dismissKanbanCtxMenu);
+    document.addEventListener('contextmenu', dismissKanbanCtxMenu);
+  }, 0);
+}
+
+function dismissKanbanCtxMenu() {
+  const menu = document.getElementById('kanban-ctx-menu');
+  if (menu) menu.remove();
+  document.removeEventListener('click', dismissKanbanCtxMenu);
+  document.removeEventListener('contextmenu', dismissKanbanCtxMenu);
+}
+
+async function kanbanCtxMove(taskId, newStatus) {
+  dismissKanbanCtxMenu();
+  await moveKanbanTask(taskId, newStatus);
 }
 
 async function moveKanbanTask(id, newStatus) {
@@ -2298,6 +2569,17 @@ function renderPlaceholder(container, icon, title, subtitle) {
 
 // ===== TRELLO BOARD RENDERING =====
 
+function getListColor(listName) {
+  const name = (listName || '').toLowerCase();
+  if (name.includes('v2 features')) return '#22c55e';
+  if (name.includes('bugs')) return '#ef4444';
+  if (name.includes('doing')) return '#f59e0b';
+  if (name.includes('done')) return '#6b7280';
+  if (name.includes('user testing')) return '#22d3ee';
+  if (name.includes('v3+ features') || name.includes('v3+')) return '#a78bfa';
+  return '#8b8b8b';
+}
+
 function renderTabs(boards) {
   const tabsEl = document.getElementById('project-tabs');
   if (!tabsEl) return;
@@ -2320,11 +2602,14 @@ function renderBoard(board) {
 
   container.innerHTML = `
     <div class="board">
-      ${board.lists.map(list => `
-        <div class="board-list">
-          <div class="board-list-header">
-            <span class="board-list-name">${list.name}</span>
-            <span class="board-list-count">${list.cards.length}</span>
+      ${board.lists.map(list => {
+        const listColor = getListColor(list.name);
+        return `
+        <div class="board-list" data-list-id="${list.id}"
+             ondragover="boardDragOver(event)" ondragleave="boardDragLeave(event)" ondrop="boardDrop(event, '${list.id}')">
+          <div class="board-list-header" style="border-bottom: 3px solid ${listColor}">
+            <span class="board-list-name" style="color: ${listColor}">${list.name}</span>
+            <span class="board-list-count" style="background: ${listColor}26">${list.cards.length}</span>
           </div>
           <div class="board-list-cards">
             ${list.cards.map(card => {
@@ -2332,13 +2617,18 @@ function renderBoard(board) {
               const hasLabels = card.labels && card.labels.length > 0;
               const hasDesc = card.desc && card.desc.trim().length > 0;
               return `
-                <div class="board-card" onclick='openCard(${JSON.stringify(card).replace(/'/g, "&#39;")})'>
+                <div class="board-card" draggable="true" data-card-id="${card.id}" style="border-left: 3px solid ${listColor}"
+                     ondragstart="boardCardDragStart(event, '${card.id}')" ondragend="boardCardDragEnd(event)"
+                     onclick='openCard(${JSON.stringify(card).replace(/'/g, "&#39;")})'>
                   ${hasLabels ? `
                     <div class="board-card-labels">
                       ${card.labels.map(l => `<div class="board-card-label ${labelColorClass(l.color)}" title="${l.name || ''}"></div>`).join('')}
                     </div>
                   ` : ''}
-                  <div class="board-card-name">${card.name}</div>
+                  <div class="board-card-top-row">
+                    <div class="board-card-name">${card.name}</div>
+                    <button class="board-card-menu-btn" onclick="event.stopPropagation(); boardCardContextMenu(event, '${card.id}', '${list.id}')" title="Move card">⋮</button>
+                  </div>
                   ${(due || hasDesc) ? `
                     <div class="board-card-meta">
                       ${hasDesc ? '<span class="board-card-desc-indicator">📝</span>' : ''}
@@ -2351,9 +2641,48 @@ function renderBoard(board) {
           </div>
           <div class="add-card-btn" onclick="openNewCard('${list.id}')">+ Add card</div>
         </div>
-      `).join('')}
+      `; }).join('')}
     </div>
+    ${board.archivedCards && board.archivedCards.length > 0 ? `
+      <div class="board-archive-section">
+        <div class="kanban-archive-header ${boardArchiveExpanded ? 'expanded' : ''}" onclick="toggleBoardArchive()">
+          <span class="kanban-archive-toggle">${boardArchiveExpanded ? '▼' : '▶'}</span>
+          <span class="kanban-archive-title">Archive</span>
+          <span class="kanban-column-count">${board.archivedCards.length}</span>
+        </div>
+        ${boardArchiveExpanded ? `
+          <div class="kanban-archive-body">
+            ${board.archivedCards.map(card => `
+              <div class="board-card archived" style="border-left: 3px solid #6b7280">
+                <div class="board-card-top-row">
+                  <div class="board-card-name">${escapeHtml(card.name)}</div>
+                  <button class="board-card-menu-btn" onclick="event.stopPropagation(); unarchiveBoardCard('${card.id}')" title="Restore card">↩</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+    ` : ''}
   `;
+}
+
+let boardArchiveExpanded = false;
+
+function toggleBoardArchive() {
+  boardArchiveExpanded = !boardArchiveExpanded;
+  if (boardsData && boardsData.boards) {
+    renderBoard(boardsData.boards[activeTab]);
+  }
+}
+
+async function unarchiveBoardCard(cardId) {
+  await fetchJSON('/api/trello/cards/' + cardId, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ closed: false })
+  });
+  refreshProjects();
 }
 
 function switchTab(idx) {
@@ -2497,6 +2826,123 @@ async function moveCardRight() {
     body: JSON.stringify({ listId: currentBoardLists[currentIdx + 1].id })
   });
   closeModal();
+  refreshProjects();
+}
+
+// ===== BOARD CARD DRAG & DROP =====
+
+function boardCardDragStart(event, cardId) {
+  event.dataTransfer.setData('text/plain', cardId);
+  event.dataTransfer.effectAllowed = 'move';
+  event.target.classList.add('board-card-dragging');
+  setTimeout(() => {
+    document.querySelectorAll('.board-list').forEach(col => col.classList.add('board-drop-target'));
+  }, 0);
+}
+
+function boardCardDragEnd(event) {
+  event.target.classList.remove('board-card-dragging');
+  document.querySelectorAll('.board-list').forEach(col => {
+    col.classList.remove('board-drop-target', 'board-drag-over');
+  });
+}
+
+function boardDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  event.currentTarget.classList.add('board-drag-over');
+}
+
+function boardDragLeave(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) {
+    event.currentTarget.classList.remove('board-drag-over');
+  }
+}
+
+async function boardDrop(event, listId) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('board-drag-over');
+  const cardId = event.dataTransfer.getData('text/plain');
+  if (!cardId) return;
+  // Don't move if dropped on same list
+  const card = document.querySelector(`[data-card-id="${cardId}"]`);
+  if (card && card.closest('.board-list')?.dataset.listId === listId) return;
+  await fetchJSON(`/api/trello/cards/${cardId}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId })
+  });
+  refreshProjects();
+}
+
+// ===== BOARD CARD CONTEXT MENU =====
+
+function boardCardContextMenu(event, cardId, currentListId) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  // Remove existing menu
+  const existing = document.getElementById('board-ctx-menu');
+  if (existing) existing.remove();
+
+  if (!boardsData || !boardsData.boards || !boardsData.boards[activeTab]) return;
+  const lists = boardsData.boards[activeTab].lists;
+
+  const moveOptions = lists.filter(l => l.id !== currentListId);
+
+  const menu = document.createElement('div');
+  menu.id = 'board-ctx-menu';
+  menu.className = 'kanban-ctx-menu';
+  menu.innerHTML = `
+    <div class="kanban-ctx-header">Move to</div>
+    ${moveOptions.map(l => {
+      const color = getListColor(l.name);
+      return `<div class="kanban-ctx-item" onclick="boardCtxMove('${cardId}', '${l.id}')" style="border-left: 3px solid ${color}; padding-left: 0.6rem">
+        ${escapeHtml(l.name)}
+      </div>`;
+    }).join('')}
+    <div class="kanban-ctx-divider"></div>
+    <div class="kanban-ctx-item kanban-ctx-archive" onclick="boardCtxArchive('${cardId}')">
+      📦 Archive
+    </div>
+  `;
+
+  menu.style.left = event.clientX + 'px';
+  menu.style.top = event.clientY + 'px';
+  document.body.appendChild(menu);
+
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+  if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+
+  setTimeout(() => {
+    document.addEventListener('click', dismissBoardCtxMenu);
+  }, 0);
+}
+
+function dismissBoardCtxMenu() {
+  const menu = document.getElementById('board-ctx-menu');
+  if (menu) menu.remove();
+  document.removeEventListener('click', dismissBoardCtxMenu);
+}
+
+async function boardCtxMove(cardId, listId) {
+  dismissBoardCtxMenu();
+  await fetchJSON(`/api/trello/cards/${cardId}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId })
+  });
+  refreshProjects();
+}
+
+async function boardCtxArchive(cardId) {
+  dismissBoardCtxMenu();
+  await fetchJSON(`/api/trello/cards/${cardId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ closed: true })
+  });
   refreshProjects();
 }
 

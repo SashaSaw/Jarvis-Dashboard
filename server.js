@@ -502,13 +502,13 @@ const AGENT_WORKSPACES = {
 };
 
 const AGENT_FILES = {
-  jarvis: ['MEMORY.md', 'SOUL.md', 'USER.md', 'IDENTITY.md'],
+  jarvis: ['MEMORY.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'HEARTBEAT.md'],
   klaus: ['AGENTS.md'],
   emily: ['AGENTS.md']
 };
 
 // Whitelist: only allow these filenames (prevent path traversal)
-const ALLOWED_FILES = new Set(['MEMORY.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'AGENTS.md']);
+const ALLOWED_FILES = new Set(['MEMORY.md', 'SOUL.md', 'USER.md', 'IDENTITY.md', 'AGENTS.md', 'HEARTBEAT.md']);
 const DAILY_NOTE_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
 
 function isAllowedFile(filename) {
@@ -775,6 +775,92 @@ app.get('/api/calendar', (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// --- Heartbeat Status ---
+
+app.get('/api/heartbeat-status', (req, res) => {
+  try {
+    const config = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG_PATH, 'utf8'));
+    const defaults = config.agents?.defaults || {};
+    const hb = defaults.heartbeat || {};
+
+    // Check if HEARTBEAT.md has real content (not just comments/headers/blanks)
+    const hbPath = path.join(defaults.workspace || '/home/sasha/.openclaw/workspace', 'HEARTBEAT.md');
+    let heartbeatContent = '';
+    let isDormant = true;
+    let checkItems = [];
+    try {
+      heartbeatContent = fs.readFileSync(hbPath, 'utf-8');
+      const lines = heartbeatContent.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('//')) {
+          isDormant = false;
+          // Extract bullet points as check items
+          if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+            checkItems.push(trimmed.slice(2).trim());
+          }
+        }
+      }
+    } catch {}
+
+    // Try to find last heartbeat from gateway logs
+    let lastHeartbeat = null;
+    let nextHeartbeat = null;
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const logPath = `/tmp/openclaw/openclaw-${today}.log`;
+      if (fs.existsSync(logPath)) {
+        const { execSync } = require('child_process');
+        const result = execSync(`grep -i "heartbeat" "${logPath}" | tail -5`, { encoding: 'utf-8', timeout: 3000 }).trim();
+        const lines = result.split('\n').filter(Boolean);
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const match = lines[i].match(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
+          if (match) {
+            lastHeartbeat = match[1];
+            break;
+          }
+        }
+      }
+    } catch {}
+
+    // Calculate next heartbeat from interval
+    const interval = hb.every || '30m';
+    const intervalMs = parseInterval(interval);
+    if (lastHeartbeat && intervalMs) {
+      const last = new Date(lastHeartbeat);
+      if (!isNaN(last.getTime())) {
+        nextHeartbeat = new Date(last.getTime() + intervalMs).toISOString();
+      }
+    }
+
+    res.json({
+      enabled: !!hb.every && hb.every !== '0m',
+      dormant: isDormant,
+      interval: hb.every || '30m',
+      model: hb.model || defaults.model?.primary || 'unknown',
+      lightContext: !!hb.lightContext,
+      activeHours: hb.activeHours || null,
+      target: hb.target || 'none',
+      checkItems,
+      lastHeartbeat,
+      nextHeartbeat
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function parseInterval(str) {
+  const match = str.match(/^(\d+)(m|h|s)$/);
+  if (!match) return null;
+  const val = parseInt(match[1]);
+  const unit = match[2];
+  if (unit === 's') return val * 1000;
+  if (unit === 'm') return val * 60 * 1000;
+  if (unit === 'h') return val * 3600 * 1000;
+  return null;
+}
 
 // --- Dashboard ---
 

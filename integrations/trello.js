@@ -56,7 +56,10 @@ function trelloRequest(method, path, body) {
 async function getFullBoard(boardId, boardName) {
   try {
     const lists = await trelloFetch(`${BASE}/boards/${boardId}/lists?key=${API_KEY}&token=${TOKEN}&fields=name,id,pos`);
-    const cards = await trelloFetch(`${BASE}/boards/${boardId}/cards?key=${API_KEY}&token=${TOKEN}&fields=name,desc,idList,due,labels,pos,dateLastActivity`);
+    const [cards, archivedCards] = await Promise.all([
+      trelloFetch(`${BASE}/boards/${boardId}/cards?key=${API_KEY}&token=${TOKEN}&fields=name,desc,idList,due,labels,pos,dateLastActivity`),
+      trelloFetch(`${BASE}/boards/${boardId}/cards?key=${API_KEY}&token=${TOKEN}&filter=closed&fields=name,desc,idList,due,labels,pos,dateLastActivity&limit=20`)
+    ]);
 
     const listMap = {};
     for (const list of lists) {
@@ -82,10 +85,21 @@ async function getFullBoard(boardId, boardName) {
       list.cards.sort((a, b) => a.pos - b.pos);
     }
 
+    const archived = (archivedCards || []).map(c => ({
+      id: c.id,
+      name: c.name,
+      desc: c.desc || '',
+      due: c.due,
+      pos: c.pos,
+      labels: (c.labels || []).map(l => ({ id: l.id, name: l.name, color: l.color })),
+      lastActivity: c.dateLastActivity
+    }));
+
     return {
       name: boardName,
       id: boardId,
       lists: sortedLists,
+      archivedCards: archived,
       totalCards: cards.length
     };
   } catch (err) {
