@@ -292,9 +292,10 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_id);
 
-  -- Migration: add prompt column if missing
+  -- Migration: add prompt and testing columns if missing
   `);
   try { db.exec(`ALTER TABLE features ADD COLUMN prompt TEXT`); } catch(e) { /* already exists */ }
+  try { db.exec(`ALTER TABLE features ADD COLUMN testing TEXT`); } catch(e) { /* already exists */ }
   db.exec(`
 
   CREATE TABLE IF NOT EXISTS project_tags (
@@ -432,8 +433,8 @@ const deleteSection = db.prepare(`DELETE FROM project_sections WHERE id = @id`);
 // --- Features ---
 
 const insertFeature = db.prepare(`
-  INSERT INTO features (project_id, name, description, status, version_target, version_shipped, tags, priority, source, trello_card_id, prompt)
-  VALUES (@project_id, @name, @description, @status, @version_target, @version_shipped, @tags, @priority, @source, @trello_card_id, @prompt)
+  INSERT INTO features (project_id, name, description, status, version_target, version_shipped, tags, priority, source, trello_card_id, prompt, testing)
+  VALUES (@project_id, @name, @description, @status, @version_target, @version_shipped, @tags, @priority, @source, @trello_card_id, @prompt, @testing)
 `);
 
 const getFeaturesByProject = db.prepare(`
@@ -454,6 +455,7 @@ const updateFeature = db.prepare(`
     source = COALESCE(@source, source),
     trello_card_id = COALESCE(@trello_card_id, trello_card_id),
     prompt = COALESCE(@prompt, prompt),
+    testing = COALESCE(@testing, testing),
     updated_at = datetime('now')
   WHERE id = @id
 `);
@@ -569,3 +571,49 @@ module.exports = {
   updateFeedback,
   deleteFeedback
 };
+
+// --- Ideas ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ideas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'active',
+    tags TEXT,
+    source TEXT,
+    project_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    archived_at TEXT
+  )
+`);
+
+const insertIdea = db.prepare(`
+  INSERT INTO ideas (title, description, tags, source) VALUES (@title, @description, @tags, @source)
+`);
+const getIdeas = db.prepare(`SELECT * FROM ideas ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'archived' THEN 1 END, created_at DESC`);
+const getActiveIdeas = db.prepare(`SELECT * FROM ideas WHERE status = 'active' ORDER BY created_at DESC`);
+const getArchivedIdeas = db.prepare(`SELECT * FROM ideas WHERE status = 'archived' ORDER BY archived_at DESC`);
+const getIdeaById = db.prepare(`SELECT * FROM ideas WHERE id = @id`);
+const updateIdea = db.prepare(`
+  UPDATE ideas SET
+    title = COALESCE(@title, title),
+    description = COALESCE(@description, description),
+    tags = COALESCE(@tags, tags),
+    source = COALESCE(@source, source),
+    status = COALESCE(@status, status),
+    project_id = COALESCE(@project_id, project_id),
+    archived_at = CASE WHEN @status = 'archived' THEN datetime('now') ELSE archived_at END,
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+const deleteIdeaPermanent = db.prepare(`DELETE FROM ideas WHERE id = @id`);
+
+module.exports.insertIdea = insertIdea;
+module.exports.getIdeas = getIdeas;
+module.exports.getActiveIdeas = getActiveIdeas;
+module.exports.getArchivedIdeas = getArchivedIdeas;
+module.exports.getIdeaById = getIdeaById;
+module.exports.updateIdea = updateIdea;
+module.exports.deleteIdeaPermanent = deleteIdeaPermanent;

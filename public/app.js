@@ -206,6 +206,7 @@ function route() {
     case 'inbox': renderInbox(main); break;
     case 'kanban': renderKanban(main); break;
     case 'projects': renderProjects(main); break;
+    case 'ideas': renderIdeas(main); break;
     case 'docs': renderDocs(main); break;
     case 'log': renderLog(main); break;
     default: renderOverview(main); break;
@@ -2330,6 +2331,7 @@ function renderFeatureCard(f, tagColorMap, projectId) {
         ${fTags.map(t => `<span class="feature-tag-pill" style="background:${tagColorMap[t] || '#6b7280'}30;color:${tagColorMap[t] || '#6b7280'}">${t}</span>`).join('')}
         ${f.source ? `<span class="feature-source-label">via ${escapeHtml(f.source)}</span>` : ''}
         ${f.prompt ? `<span class="feature-prompt-badge" title="Has Claude Code prompt">🤖</span>` : ''}
+        ${f.testing ? `<span class="feature-prompt-badge" title="Has testing checklist">🧪</span>` : ''}
       </div>
       ${f.status === 'defined' && !f.trello_card_id ? `<button class="feature-promote-btn" onclick="event.stopPropagation(); promoteFeature(${f.id}, '${projectId}')">→ Promote to Kanban</button>` : ''}
     </div>
@@ -2598,6 +2600,10 @@ function openFeatureModal(feature, projectId) {
           </div>
           <textarea class="modal-textarea prompt-textarea" id="fe-prompt" rows="6" placeholder="Paste a detailed prompt for Claude Code to implement this feature...">${escapeHtml(f.prompt || '')}</textarea>
         </div>
+        <div class="modal-field">
+          <label>🧪 Testing Checklist</label>
+          <textarea class="modal-textarea" id="fe-testing" rows="4" placeholder="What to test after implementation...">${escapeHtml(f.testing || '')}</textarea>
+        </div>
       </div>
       <div class="modal-actions">
         <button class="btn-move" onclick="saveFeatureModal(${f.id || 'null'}, '${projectId}')">${isNew ? 'Create' : 'Save'}</button>
@@ -2620,7 +2626,8 @@ async function saveFeatureModal(featureId, projectId) {
     priority: document.getElementById('fe-priority').value,
     tags: document.getElementById('fe-tags').value || null,
     source: document.getElementById('fe-source').value || null,
-    prompt: document.getElementById('fe-prompt').value || null
+    prompt: document.getElementById('fe-prompt').value || null,
+    testing: document.getElementById('fe-testing').value || null
   };
   if (!body.name) return alert('Name is required');
 
@@ -2870,6 +2877,233 @@ function renderMarkdown(md) {
   html = html.replace(/(<\/(?:h[1-4]|ul|ol|pre|hr)>)\s*<\/p>/g, '$1');
 
   return html;
+}
+
+// ==================== IDEAS ====================
+
+async function renderIdeas(container) {
+  container.innerHTML = `
+    <div class="view-container ideas-page">
+      <div class="view-header">
+        <h2>💡 Ideas</h2>
+        <button class="btn-move" onclick="openIdeaModal()">+ New Idea</button>
+      </div>
+      <div class="ideas-grid" id="ideas-grid">
+        <div class="loading"><div class="spinner"></div> Loading ideas...</div>
+      </div>
+    </div>
+  `;
+  await loadIdeas();
+}
+
+async function loadIdeas() {
+  const ideas = await fetchJSON('/api/ideas');
+  const grid = document.getElementById('ideas-grid');
+  if (!grid) return;
+
+  const active = (ideas || []).filter(i => i.status === 'active');
+  const archived = (ideas || []).filter(i => i.status === 'archived');
+  const promoted = (ideas || []).filter(i => i.status === 'promoted');
+
+  if (!active.length && !archived.length && !promoted.length) {
+    grid.innerHTML = `<div class="docs-empty-state" style="padding:3rem;text-align:center;grid-column:1/-1">
+      <div class="placeholder-icon">💡</div>
+      <div class="placeholder-text">No ideas yet</div>
+      <div class="placeholder-sub">Click "+ New Idea" to capture your first one</div>
+    </div>`;
+    return;
+  }
+
+  let html = active.map(i => renderIdeaCard(i)).join('');
+
+  if (promoted.length) {
+    html += `<div class="ideas-divider" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+      <span>🚀 Promoted (${promoted.length})</span><span class="chevron">▸</span>
+    </div>
+    <div class="ideas-section collapsed">${promoted.map(i => renderIdeaCard(i)).join('')}</div>`;
+  }
+
+  if (archived.length) {
+    html += `<div class="ideas-divider" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+      <span>📦 Archived (${archived.length})</span><span class="chevron">▸</span>
+    </div>
+    <div class="ideas-section collapsed">${archived.map(i => renderIdeaCard(i)).join('')}</div>`;
+  }
+
+  grid.innerHTML = html;
+}
+
+function renderIdeaCard(idea) {
+  const tags = idea.tags ? idea.tags.split(',').map(t => t.trim()) : [];
+  const statusClass = idea.status === 'archived' ? 'archived' : idea.status === 'promoted' ? 'promoted' : '';
+  const age = getTimeAgo(idea.created_at);
+
+  return `
+    <div class="idea-card ${statusClass}" onclick="openIdeaModal(${idea.id})">
+      <div class="idea-card-header">
+        <span class="idea-card-title">${escapeHtml(idea.title)}</span>
+        <div class="idea-card-actions" onclick="event.stopPropagation()">
+          ${idea.status === 'active' ? `
+            <button class="idea-action-btn" onclick="promoteIdea(${idea.id})" title="Promote to project">🚀</button>
+            <button class="idea-action-btn" onclick="archiveIdea(${idea.id})" title="Archive">📦</button>
+          ` : idea.status === 'archived' ? `
+            <button class="idea-action-btn" onclick="restoreIdea(${idea.id})" title="Restore">♻️</button>
+            <button class="idea-action-btn delete" onclick="deleteIdea(${idea.id})" title="Delete permanently">🗑</button>
+          ` : `
+            <span class="idea-promoted-badge">→ ${idea.project_id || 'project'}</span>
+          `}
+        </div>
+      </div>
+      ${idea.description ? `<div class="idea-card-desc">${escapeHtml(idea.description)}</div>` : ''}
+      <div class="idea-card-footer">
+        ${tags.map(t => `<span class="idea-tag">${escapeHtml(t)}</span>`).join('')}
+        ${idea.source ? `<span class="idea-source">via ${escapeHtml(idea.source)}</span>` : ''}
+        <span class="idea-age">${age}</span>
+      </div>
+    </div>
+  `;
+}
+
+function getTimeAgo(dateStr) {
+  const now = new Date();
+  const d = new Date(dateStr + 'Z');
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
+  return d.toLocaleDateString();
+}
+
+function openIdeaModal(ideaId) {
+  let idea = null;
+  if (ideaId) {
+    // Find from loaded ideas
+    fetchJSON(`/api/ideas`).then(ideas => {
+      idea = ideas.find(i => i.id === ideaId);
+      showIdeaModal(idea);
+    });
+  } else {
+    showIdeaModal(null);
+  }
+}
+
+function showIdeaModal(idea) {
+  const f = idea || {};
+  const isNew = !idea;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'idea-modal';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3>${isNew ? '💡 New Idea' : '✏️ Edit Idea'}</h3>
+        <button class="modal-close" onclick="document.getElementById('idea-modal').remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field"><label>Title</label><input type="text" class="modal-input" id="idea-title" value="${escapeHtml(f.title || '')}" placeholder="What's the idea?"></div>
+        <div class="modal-field"><label>Description</label><textarea class="modal-textarea" id="idea-desc" rows="4" placeholder="Quick description — what problem does it solve?">${escapeHtml(f.description || '')}</textarea></div>
+        <div class="modal-field"><label>Tags (comma-separated)</label><input type="text" class="modal-input" id="idea-tags" value="${escapeHtml(f.tags || '')}" placeholder="e.g. iOS, productivity, AI"></div>
+        <div class="modal-field"><label>Source</label><input type="text" class="modal-input" id="idea-source" value="${escapeHtml(f.source || '')}" placeholder="e.g. Reddit, brainstorm, user feedback"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="saveIdea(${f.id || 'null'})">${isNew ? 'Create' : 'Save'}</button>
+        ${!isNew ? `<button class="btn-archive" onclick="deleteIdea(${f.id}); document.getElementById('idea-modal')?.remove()">🗑 Delete</button>` : ''}
+        <button class="btn-archive" onclick="document.getElementById('idea-modal').remove()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.style.display = 'flex';
+  document.getElementById('idea-title')?.focus();
+}
+
+async function saveIdea(ideaId) {
+  const body = {
+    title: document.getElementById('idea-title').value,
+    description: document.getElementById('idea-desc').value || null,
+    tags: document.getElementById('idea-tags').value || null,
+    source: document.getElementById('idea-source').value || null
+  };
+  if (!body.title) return alert('Title is required');
+
+  if (ideaId) {
+    await fetchJSON(`/api/ideas/${ideaId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  } else {
+    await fetchJSON('/api/ideas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+  document.getElementById('idea-modal')?.remove();
+  loadIdeas();
+}
+
+async function archiveIdea(id) {
+  await fetchJSON(`/api/ideas/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'archived' }) });
+  loadIdeas();
+}
+
+async function restoreIdea(id) {
+  await fetchJSON(`/api/ideas/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'active' }) });
+  loadIdeas();
+}
+
+async function deleteIdea(id) {
+  if (!confirm('Permanently delete this idea?')) return;
+  await fetchJSON(`/api/ideas/${id}`, { method: 'DELETE' });
+  loadIdeas();
+}
+
+async function promoteIdea(id) {
+  const ideas = await fetchJSON('/api/ideas');
+  const idea = ideas.find(i => i.id === id);
+  if (!idea) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'promote-modal';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3>🚀 Promote to Project</h3>
+        <button class="modal-close" onclick="document.getElementById('promote-modal').remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--text-muted);margin-bottom:1rem">Create a new project from "<strong>${escapeHtml(idea.title)}</strong>"</p>
+        <div class="modal-field"><label>Project ID (slug)</label><input type="text" class="modal-input" id="promote-id" value="${idea.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30).replace(/-+$/, '')}" placeholder="my-project"></div>
+        <div class="modal-field"><label>Icon (emoji)</label><input type="text" class="modal-input" id="promote-icon" value="💡" style="width:60px"></div>
+        <div class="modal-field"><label>Platform</label><input type="text" class="modal-input" id="promote-platform" placeholder="e.g. iOS / Web / Both"></div>
+        <div class="modal-field"><label>Category</label><input type="text" class="modal-input" id="promote-category" placeholder="e.g. Productivity, Social, Music"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="executePromote(${id})">🚀 Create Project</button>
+        <button class="btn-archive" onclick="document.getElementById('promote-modal').remove()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.style.display = 'flex';
+}
+
+async function executePromote(ideaId) {
+  const body = {
+    project_id: document.getElementById('promote-id').value,
+    icon: document.getElementById('promote-icon').value || '💡',
+    platform: document.getElementById('promote-platform').value || null,
+    category: document.getElementById('promote-category').value || null
+  };
+  if (!body.project_id) return alert('Project ID is required');
+
+  const result = await fetchJSON(`/api/ideas/${ideaId}/promote`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  document.getElementById('promote-modal')?.remove();
+  if (result?.project_id) {
+    loadIdeas();
+    // Optionally navigate to the new project
+    if (confirm('Project created! View it now?')) {
+      loadView('projects');
+      setTimeout(() => selectProject(result.project_id), 500);
+    }
+  }
 }
 
 async function renderDocs(container) {

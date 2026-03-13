@@ -54,6 +54,38 @@ function redactObject(obj) {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// --- Auto-logging middleware for all mutations ---
+const AUTO_LOG_SKIP = ['/api/log', '/api/agent/', '/api/events'];
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'DELETE'].includes(req.method)) return next();
+  if (AUTO_LOG_SKIP.some(p => req.path.startsWith(p))) return next();
+
+  const startTime = Date.now();
+
+  res.on('finish', () => {
+    try {
+      const duration = Date.now() - startTime;
+      const action = req.method === 'POST' ? 'create' : req.method === 'PUT' ? 'update' : 'delete';
+      const resource = req.path.replace(/^\/api\//, '').replace(/\/\d+/g, '/:id');
+      const label = req.body?.title || req.body?.name || '';
+      const description = `${req.method} ${req.path}${label ? ` — "${label}"` : ''}`;
+
+      insertLogEntry.run({
+        agent: req.headers['x-agent'] || 'system',
+        action: `${action}_${resource.split('/')[0]}`,
+        description: description,
+        reason: null,
+        status: res.statusCode < 400 ? 'completed' : 'failed',
+        started_at: new Date(startTime).toISOString(),
+        completed_at: new Date().toISOString(),
+        duration_ms: duration,
+        metadata: null
+      });
+    } catch(e) { /* don't break the response if logging fails */ }
+  });
+  next();
+});
+
 // --- Webhook Receiver ---
 
 app.post('/api/hooks', (req, res) => {
@@ -655,7 +687,7 @@ app.get('/api/projects/:id/features', (req, res) => {
 
 app.post('/api/projects/:id/features', (req, res) => {
   try {
-    const { name, description, status, version_target, version_shipped, tags, priority, source, trello_card_id, prompt } = req.body;
+    const { name, description, status, version_target, version_shipped, tags, priority, source, trello_card_id, prompt, testing } = req.body;
     if (!name) return res.status(400).json({ error: 'name required' });
     const result = insertFeature.run({
       project_id: req.params.id,
@@ -668,7 +700,8 @@ app.post('/api/projects/:id/features', (req, res) => {
       priority: priority || 'normal',
       source: source || null,
       trello_card_id: trello_card_id || null,
-      prompt: prompt || null
+      prompt: prompt || null,
+      testing: testing || null
     });
     const feature = getFeatureById.get({ id: result.lastInsertRowid });
     res.json(feature);
@@ -679,7 +712,7 @@ app.post('/api/projects/:id/features', (req, res) => {
 
 app.put('/api/projects/:id/features/:featureId', (req, res) => {
   try {
-    const fields = ['name','description','status','version_target','version_shipped','tags','priority','source','trello_card_id','prompt'];
+    const fields = ['name','description','status','version_target','version_shipped','tags','priority','source','trello_card_id','prompt','testing'];
     const params = { id: parseInt(req.params.featureId) };
     for (const f of fields) params[f] = req.body[f] !== undefined ? req.body[f] : null;
     updateFeature.run(params);
@@ -1206,6 +1239,66 @@ function parseInterval(str) {
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// --- Ideas ---
+const { insertIdea, getIdeas, getActiveIdeas, getArchivedIdeas, getIdeaById, updateIdea, deleteIdeaPermanent } = require('./db');
+
+app.get('/api/ideas', (req, res) => {
+  try {
+    const status = req.query.status;
+    const ideas = status === 'archived' ? getArchivedIdeas.all() : status === 'active' ? getActiveIdeas.all() : getIdeas.all();
+    res.json(ideas);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/ideas', (req, res) => {
+  try {
+    const { title, description, tags, source } = req.body;
+    if (!title) return res.status(400).json({ error: 'title required' });
+    const result = insertIdea.run({ title, description: description || null, tags: tags || null, source: source || null });
+    res.json(getIdeaById.get({ id: result.lastInsertRowid }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/ideas/:id', (req, res) => {
+  try {
+    const fields = ['title','description','tags','source','status','project_id'];
+    const params = { id: parseInt(req.params.id) };
+    for (const f of fields) params[f] = req.body[f] !== undefined ? req.body[f] : null;
+    updateIdea.run(params);
+    res.json(getIdeaById.get({ id: parseInt(req.params.id) }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/ideas/:id', (req, res) => {
+  try {
+    deleteIdeaPermanent.run({ id: parseInt(req.params.id) });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Promote idea to project
+app.post('/api/ideas/:id/promote', (req, res) => {
+  try {
+    const idea = getIdeaById.get({ id: parseInt(req.params.id) });
+    if (!idea) return res.status(404).json({ error: 'Idea not found' });
+    const projectId = (req.body.project_id || idea.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)).replace(/-+$/, '');
+    const result = insertProject.run({
+      id: projectId,
+      name: idea.title,
+      tagline: idea.description || null,
+      icon: req.body.icon || '💡',
+      status: 'active',
+      platform: req.body.platform || null,
+      tech_stack: req.body.tech_stack || null,
+      current_version: null, next_version: null, release_date: null,
+      category: req.body.category || null,
+      app_store_url: null, github_url: null, landing_url: null, trello_board_id: null
+    });
+    updateIdea.run({ id: parseInt(req.params.id), title: null, description: null, tags: null, source: null, status: 'promoted', project_id: projectId });
+    res.json({ ok: true, project_id: projectId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
