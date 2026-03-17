@@ -208,6 +208,7 @@ function route() {
     case 'projects': renderProjects(main); break;
     case 'ideas': renderIdeas(main); break;
     case 'docs': renderDocs(main); break;
+    case 'finance': renderFinance(main); break;
     case 'log': renderLog(main); break;
     default: renderOverview(main); break;
   }
@@ -1903,7 +1904,10 @@ let projectHubState = {
   featureGroupBy: 'status',
   collapsedSections: {},
   editingSection: null,
-  editingFeature: null
+  editingFeature: null,
+  openTabs: [],       // [{id, name, icon}]
+  activeTab: null,    // project id or null (null = overview)
+  showOverview: true  // show grid overview
 };
 
 const FEATURE_STATUSES = [
@@ -1925,28 +1929,16 @@ const PROJECT_STATUS_COLORS = {
 async function renderProjects(container) {
   container.innerHTML = `
     <div class="view-container project-hub">
-      <div class="project-hub-topbar" id="project-hub-topbar">
-        <div class="project-switcher" id="project-switcher">
-          <button class="project-switcher-btn" id="project-switcher-btn" onclick="toggleProjectDropdown()">
-            <span id="project-switcher-label">Loading...</span>
-            <span class="project-switcher-chevron">▾</span>
-          </button>
-          <div class="project-dropdown" id="project-dropdown"></div>
-        </div>
-      </div>
+      <div class="project-hub-topbar" id="project-hub-topbar"></div>
       <div class="project-hub-content" id="project-hub-content">
-        <div class="docs-empty-state" style="padding:3rem;text-align:center">
-          <div class="placeholder-icon">📁</div>
-          <div class="placeholder-text">Select a project</div>
-          <div class="placeholder-sub">Or wait for projects to be created</div>
-        </div>
+        <div class="loading"><div class="spinner"></div> Loading projects...</div>
       </div>
     </div>
   `;
   // Close dropdown when clicking outside
   document.addEventListener('click', (e) => {
-    const dd = document.getElementById('project-dropdown');
-    const btn = document.getElementById('project-switcher-btn');
+    const dd = document.getElementById('project-tab-dropdown');
+    const btn = document.getElementById('project-tab-add-btn');
     if (dd && !dd.contains(e.target) && !btn?.contains(e.target)) {
       dd.classList.remove('open');
     }
@@ -1957,70 +1949,198 @@ async function renderProjects(container) {
 async function loadProjectsList() {
   const projects = await fetchJSON('/api/projects');
   projectHubState.projects = projects || [];
-  renderProjectTabs();
-  if (projectHubState.projects.length > 0 && !projectHubState.selectedId) {
-    selectProject(projectHubState.projects[0].id);
-  } else if (projectHubState.selectedId) {
-    selectProject(projectHubState.selectedId);
+  // If we have an active tab, go to it; otherwise show overview
+  if (projectHubState.activeTab) {
+    renderProjectTabBar();
+    selectProject(projectHubState.activeTab);
+  } else {
+    projectHubState.showOverview = true;
+    renderProjectTabBar();
+    renderProjectOverview();
   }
 }
 
-function renderProjectTabs() {
-  const projects = projectHubState.projects;
-  const selected = projects.find(p => p.id === projectHubState.selectedId);
+function getVersionProgress(project, features) {
+  if (!features || !features.length) return { done: 0, total: 0, pct: 0, label: '' };
+  const nextVer = project.next_version;
+  const hasCurrentVersion = !!project.current_version;
 
-  // Update switcher button label
-  const label = document.getElementById('project-switcher-label');
-  if (label) {
-    if (selected) {
-      label.innerHTML = `${selected.icon || '📁'} ${escapeHtml(selected.name)}`;
-    } else if (!projects.length) {
-      label.textContent = 'No projects';
+  let targetFeatures;
+  if (hasCurrentVersion && nextVer) {
+    // Progress toward next version
+    targetFeatures = features.filter(f => f.version_target === `v${nextVer}` || f.version_target === nextVer);
+    if (!targetFeatures.length) targetFeatures = features; // fallback to all
+  } else {
+    // Not built yet — progress toward v1.0 (all features)
+    targetFeatures = features;
+  }
+
+  const done = targetFeatures.filter(f => f.status === 'shipped').length;
+  const building = targetFeatures.filter(f => f.status === 'building').length;
+  const total = targetFeatures.length;
+  const pct = total > 0 ? Math.round(((done + building * 0.5) / total) * 100) : 0;
+  const vLabel = hasCurrentVersion && nextVer ? `v${nextVer}` : 'v1.0';
+
+  return { done, building, total, pct, vLabel };
+}
+
+function renderProjectOverview() {
+  const content = document.getElementById('project-hub-content');
+  if (!content) return;
+
+  const active = projectHubState.projects.filter(p => p.status !== 'archived');
+  const archived = projectHubState.projects.filter(p => p.status === 'archived');
+
+  if (!active.length && !archived.length) {
+    content.innerHTML = `<div class="docs-empty-state" style="padding:3rem;text-align:center">
+      <div class="placeholder-icon">📁</div>
+      <div class="placeholder-text">No projects yet</div>
+    </div>`;
+    return;
+  }
+
+  content.innerHTML = `
+    <div class="project-overview-grid">
+      ${active.map(p => {
+        const features = p.features || [];
+        const vp = getVersionProgress(p, features);
+        const techPills = parseTechStack(p.tech_stack);
+        const statusColor = PROJECT_STATUS_COLORS[p.status] || '#6b7280';
+        return `
+          <div class="project-overview-card" onclick="openProjectTab('${p.id}')">
+            <div class="po-card-header">
+              <span class="po-card-icon">${p.icon || '📁'}</span>
+              <div class="po-card-title-area">
+                <div class="po-card-name">${escapeHtml(p.name)}</div>
+                ${p.tagline ? `<div class="po-card-tagline">${escapeHtml(p.tagline)}</div>` : ''}
+              </div>
+              <span class="project-status-badge" style="background:${statusColor}">${p.status}</span>
+            </div>
+            <div class="po-card-meta">
+              ${p.current_version ? `<span class="po-meta-pill">v${escapeHtml(p.current_version)}</span>` : ''}
+              ${p.next_version ? `<span class="po-meta-pill po-meta-next">→ v${escapeHtml(p.next_version)}</span>` : ''}
+              ${p.platform ? `<span class="po-meta-pill">${escapeHtml(p.platform)}</span>` : ''}
+              <span class="po-meta-pill">${p.project_type === 'personal' ? '🔧 Personal' : '🚀 Product'}</span>
+            </div>
+            ${vp.total > 0 ? `
+              <div class="po-version-progress">
+                <div class="po-vp-header">
+                  <span class="po-vp-label">Progress to ${vp.vLabel}</span>
+                  <span class="po-vp-pct">${vp.done}/${vp.total} features · ${vp.pct}%</span>
+                </div>
+                <div class="po-vp-bar">
+                  <div class="po-vp-fill" style="width:${vp.pct}%"></div>
+                </div>
+              </div>
+            ` : `<div class="po-version-progress"><span class="po-vp-label" style="color:var(--text-muted)">No features yet</span></div>`}
+            ${techPills.length ? `<div class="po-card-tech">${techPills.slice(0, 5).map(t => `<span class="tech-pill">${escapeHtml(t)}</span>`).join('')}${techPills.length > 5 ? `<span class="tech-pill">+${techPills.length - 5}</span>` : ''}</div>` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+    ${archived.length ? `
+      <div class="po-archived-section">
+        <div class="po-archived-header" onclick="this.parentElement.classList.toggle('expanded')">📦 Archived (${archived.length})</div>
+        <div class="po-archived-grid">
+          ${archived.map(p => `
+            <div class="project-overview-card po-card-archived" onclick="openProjectTab('${p.id}')">
+              <div class="po-card-header">
+                <span class="po-card-icon">${p.icon || '📁'}</span>
+                <div class="po-card-name">${escapeHtml(p.name)}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+  `;
+}
+
+function openProjectTab(id) {
+  const p = projectHubState.projects.find(p => p.id === id);
+  if (!p) return;
+  // Add to tabs if not already there
+  if (!projectHubState.openTabs.find(t => t.id === id)) {
+    projectHubState.openTabs.push({ id: p.id, name: p.name, icon: p.icon || '📁' });
+  }
+  projectHubState.activeTab = id;
+  projectHubState.showOverview = false;
+  renderProjectTabBar();
+  selectProject(id);
+}
+
+function closeProjectTab(id, event) {
+  if (event) event.stopPropagation();
+  projectHubState.openTabs = projectHubState.openTabs.filter(t => t.id !== id);
+  if (projectHubState.activeTab === id) {
+    // Switch to another tab or overview
+    if (projectHubState.openTabs.length > 0) {
+      const next = projectHubState.openTabs[projectHubState.openTabs.length - 1];
+      projectHubState.activeTab = next.id;
+      projectHubState.showOverview = false;
+      renderProjectTabBar();
+      selectProject(next.id);
     } else {
-      label.textContent = 'Select project...';
+      projectHubState.activeTab = null;
+      projectHubState.showOverview = true;
+      renderProjectTabBar();
+      renderProjectOverview();
     }
+  } else {
+    renderProjectTabBar();
   }
-
-  // Build dropdown
-  const dd = document.getElementById('project-dropdown');
-  if (!dd) return;
-  const active = projects.filter(p => p.status !== 'archived');
-  const archived = projects.filter(p => p.status === 'archived');
-
-  let html = '';
-  if (active.length) {
-    html += active.map(p => `
-      <div class="project-dropdown-item ${p.id === projectHubState.selectedId ? 'active' : ''}" onclick="selectProject('${p.id}'); closeProjectDropdown()">
-        <span class="project-dropdown-icon">${p.icon || '📁'}</span>
-        <span class="project-dropdown-name">${escapeHtml(p.name)}</span>
-        <span class="project-dropdown-status" style="background:${PROJECT_STATUS_COLORS[p.status] || '#6b7280'}">${p.status}</span>
-      </div>
-    `).join('');
-  }
-  if (archived.length) {
-    html += `<div class="project-dropdown-divider">📦 Archived</div>`;
-    html += archived.map(p => `
-      <div class="project-dropdown-item archived ${p.id === projectHubState.selectedId ? 'active' : ''}" onclick="selectProject('${p.id}'); closeProjectDropdown()">
-        <span class="project-dropdown-icon">${p.icon || '📁'}</span>
-        <span class="project-dropdown-name">${escapeHtml(p.name)}</span>
-        <span class="project-dropdown-status" style="background:${PROJECT_STATUS_COLORS[p.status] || '#6b7280'}">${p.status}</span>
-      </div>
-    `).join('');
-  }
-  dd.innerHTML = html;
 }
 
-function toggleProjectDropdown() {
-  document.getElementById('project-dropdown')?.classList.toggle('open');
+function switchToOverview() {
+  projectHubState.activeTab = null;
+  projectHubState.showOverview = true;
+  projectHubState.selectedId = null;
+  renderProjectTabBar();
+  renderProjectOverview();
 }
 
-function closeProjectDropdown() {
-  document.getElementById('project-dropdown')?.classList.remove('open');
+function renderProjectTabBar() {
+  const topbar = document.getElementById('project-hub-topbar');
+  if (!topbar) return;
+  const tabs = projectHubState.openTabs;
+  const unopened = projectHubState.projects.filter(p => p.status !== 'archived' && !tabs.find(t => t.id === p.id));
+
+  topbar.innerHTML = `
+    <div class="project-tab-bar">
+      <div class="project-tab ${projectHubState.showOverview ? 'active' : ''}" onclick="switchToOverview()">
+        <span>📁 Overview</span>
+      </div>
+      ${tabs.map(t => `
+        <div class="project-tab ${projectHubState.activeTab === t.id ? 'active' : ''}" onclick="openProjectTab('${t.id}')">
+          <span>${t.icon} ${escapeHtml(t.name)}</span>
+          <button class="project-tab-close" onclick="closeProjectTab('${t.id}', event)">&times;</button>
+        </div>
+      `).join('')}
+      <div class="project-tab-add-wrapper">
+        <button class="project-tab-add-btn" id="project-tab-add-btn" onclick="toggleTabDropdown()">+</button>
+        <div class="project-tab-dropdown" id="project-tab-dropdown">
+          ${unopened.length ? unopened.map(p => `
+            <div class="project-dropdown-item" onclick="openProjectTab('${p.id}'); closeTabDropdown()">
+              <span class="project-dropdown-icon">${p.icon || '📁'}</span>
+              <span class="project-dropdown-name">${escapeHtml(p.name)}</span>
+            </div>
+          `).join('') : '<div class="project-dropdown-item" style="color:var(--text-muted)">All projects open</div>'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleTabDropdown() {
+  document.getElementById('project-tab-dropdown')?.classList.toggle('open');
+}
+function closeTabDropdown() {
+  document.getElementById('project-tab-dropdown')?.classList.remove('open');
 }
 
 async function selectProject(id) {
   projectHubState.selectedId = id;
-  renderProjectTabs();
+  projectHubState.showOverview = false;
   const content = document.getElementById('project-hub-content');
   if (content) content.innerHTML = '<div class="loading"><div class="spinner"></div> Loading project...</div>';
   const data = await fetchJSON(`/api/projects/${id}`);
@@ -2032,12 +2152,22 @@ async function selectProject(id) {
   renderProjectHub();
 }
 
+async function toggleProjectType(projectId, type) {
+  await fetchJSON(`/api/projects/${projectId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_type: type })
+  });
+  await selectProject(projectId);
+}
+
 function renderProjectHub() {
   const content = document.getElementById('project-hub-content');
   if (!content) return;
   const p = projectHubState.projectData;
   if (!p) return;
 
+  const isProduct = p.project_type !== 'personal';
   const sections = p.sections || [];
   const getSection = (type) => sections.find(s => s.section_type === type);
 
@@ -2046,9 +2176,9 @@ function renderProjectHub() {
     ${renderProjectSection('concept', 'Concept & Definition', getSection('concept'), p.id)}
     ${renderFeatureMap(p)}
     ${renderProjectKanban(p)}
-    ${renderProjectSection('feedback_intro', 'User Feedback', getSection('feedback_intro'), p.id)}
-    ${renderFeedbackList(p)}
-    ${renderProjectSection('marketing', 'Marketing', getSection('marketing'), p.id)}
+    ${isProduct ? renderProjectSection('feedback_intro', 'User Feedback', getSection('feedback_intro'), p.id) : ''}
+    ${isProduct ? renderFeedbackList(p) : ''}
+    ${isProduct ? renderProjectSection('marketing', 'Marketing', getSection('marketing'), p.id) : ''}
     ${renderProjectSection('flows', 'App Flows', getSection('flows'), p.id)}
     ${renderProjectSection('tech', 'Tech Stack', getSection('tech'), p.id)}
   `;
@@ -2060,14 +2190,15 @@ function renderProjectHub() {
 }
 
 function getProjectCompleteness(p) {
+  const isProduct = p.project_type !== 'personal';
   const checks = [
     { label: 'Tagline', done: !!p.tagline },
     { label: 'Concept defined', done: !!(p.sections || []).find(s => s.section_type === 'concept' && s.content && s.content.trim().length > 20) },
     { label: 'Tech stack', done: !!(p.sections || []).find(s => s.section_type === 'tech' && s.content && s.content.trim().length > 20) },
-    { label: 'Marketing plan', done: !!(p.sections || []).find(s => s.section_type === 'marketing' && s.content && s.content.trim().length > 20) },
+    ...(isProduct ? [{ label: 'Marketing plan', done: !!(p.sections || []).find(s => s.section_type === 'marketing' && s.content && s.content.trim().length > 20) }] : []),
     { label: 'App flows', done: !!(p.sections || []).find(s => s.section_type === 'flows' && s.content && s.content.trim().length > 20) },
     { label: 'Features defined', done: (p.features || []).length >= 3 },
-    { label: 'User feedback', done: (p.feedback || []).length >= 1 },
+    ...(isProduct ? [{ label: 'User feedback', done: (p.feedback || []).length >= 1 }] : []),
     { label: 'App Store / GitHub link', done: !!(p.app_store_url || p.github_url) },
     { label: 'Version set', done: !!p.current_version || !!p.next_version },
     { label: 'Platform & category', done: !!(p.platform && p.category) },
@@ -2112,6 +2243,10 @@ function renderProjectHeader(p) {
           </div>
         </div>
         <div class="project-header-actions">
+          <div class="project-type-toggle" title="${p.project_type === 'personal' ? 'Personal project — no marketing/feedback sections' : 'Product — includes marketing & feedback sections'}">
+            <button class="type-toggle-btn ${p.project_type !== 'personal' ? 'active' : ''}" onclick="toggleProjectType('${p.id}', 'product')">🚀 Product</button>
+            <button class="type-toggle-btn ${p.project_type === 'personal' ? 'active' : ''}" onclick="toggleProjectType('${p.id}', 'personal')">🔧 Personal</button>
+          </div>
           <span class="project-status-badge" style="background:${statusColor}">${p.status}</span>
           <button class="btn-doc-action" onclick="openProjectEditModal('${p.id}')">✏️ Edit</button>
           ${p.status !== 'archived' ? `<button class="btn-archive" onclick="archiveProject('${p.id}')">📦 Archive</button>` : `<button class="btn-move" onclick="restoreProject('${p.id}')">♻️ Restore</button><button class="btn-archive" style="color:#ef4444" onclick="permanentDeleteProject('${p.id}')">🗑 Delete</button>`}
@@ -2121,9 +2256,23 @@ function renderProjectHeader(p) {
         ${versionInfo.length ? `<span class="project-meta-item">📦 ${versionInfo.join(' ')}</span>` : ''}
         ${p.platform ? `<span class="project-meta-item">📱 ${escapeHtml(p.platform)}</span>` : ''}
         ${p.category ? `<span class="project-meta-item">🏷️ ${escapeHtml(p.category)}</span>` : ''}
-        ${p.tech_stack ? `<span class="project-meta-item">⚙️ ${escapeHtml(p.tech_stack)}</span>` : ''}
+        ${p.tech_stack ? `<span class="project-meta-item">⚙️ ${parseTechStack(p.tech_stack).map(t => `<span class="tech-pill">${escapeHtml(t)}</span>`).join('')}</span>` : ''}
       </div>
       ${links.length ? `<div class="project-header-links">${links.join('')}</div>` : ''}
+      ${(() => {
+        const features = p.features || [];
+        const vp = getVersionProgress(p, features);
+        if (vp.total > 0) {
+          return `<div class="po-version-progress po-vp-detail">
+            <div class="po-vp-header">
+              <span class="po-vp-label">📦 Progress to ${vp.vLabel}</span>
+              <span class="po-vp-pct">${vp.done} shipped${vp.building ? `, ${vp.building} building` : ''} of ${vp.total} features · ${vp.pct}%</span>
+            </div>
+            <div class="po-vp-bar"><div class="po-vp-fill" style="width:${vp.pct}%"></div></div>
+          </div>`;
+        }
+        return '';
+      })()}
       <div class="project-completeness">
         <div class="project-completeness-header">
           <span class="project-completeness-label">Project completeness</span>
@@ -2144,9 +2293,13 @@ function renderProjectHeader(p) {
 
 function renderProjectSection(type, title, section, projectId) {
   const icon = SECTION_ICONS[type] || '📄';
-  const isCollapsed = projectHubState.collapsedSections[type];
-  const isEditing = projectHubState.editingSection === (section ? section.id : `new-${type}`);
   const content = section ? section.content : '';
+  const isEmpty = !content || !content.trim();
+  // Auto-collapse empty sections unless user has explicitly toggled them
+  const isCollapsed = projectHubState.collapsedSections[type] !== undefined
+    ? projectHubState.collapsedSections[type]
+    : isEmpty;
+  const isEditing = projectHubState.editingSection === (section ? section.id : `new-${type}`);
 
   return `
     <div class="project-section-card">
@@ -2207,7 +2360,7 @@ async function saveProjectSection(type, sectionId, projectId) {
     });
   }
   projectHubState.editingSection = null;
-  selectProject(projectId);
+  await selectProjectPreserveScroll(projectId);
 }
 
 // --- Feature Map ---
@@ -2252,7 +2405,7 @@ function renderFeatureMap(p) {
     groups['untagged'] = { label: '🏷️ Untagged', color: '#6b7280', items: [] };
     for (const t of tags) groups[t.name] = { label: `🏷️ ${t.name}`, color: t.color || '#6b7280', items: [] };
     for (const f of filtered) {
-      const fTags = f.tags ? f.tags.split(',').map(t => t.trim()) : [];
+      const fTags = parseFeatureTags(f.tags);
       if (!fTags.length) { groups['untagged'].items.push(f); continue; }
       for (const t of fTags) {
         if (!groups[t]) groups[t] = { label: `🏷️ ${t}`, color: '#6b7280', items: [] };
@@ -2308,8 +2461,20 @@ function renderFeatureMap(p) {
   `;
 }
 
+function parseFeatureTags(raw) {
+  if (!raw) return [];
+  try { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr.map(t => t.trim()).filter(Boolean); } catch {}
+  return raw.replace(/[\[\]"]/g, '').split(',').map(t => t.trim()).filter(Boolean);
+}
+
+function parseTechStack(raw) {
+  if (!raw) return [];
+  try { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr.map(t => t.trim()).filter(Boolean); } catch {}
+  return raw.replace(/[\[\]"]/g, '').split(',').map(t => t.trim()).filter(Boolean);
+}
+
 function renderFeatureCard(f, tagColorMap, projectId) {
-  const fTags = f.tags ? f.tags.split(',').map(t => t.trim()) : [];
+  const fTags = parseFeatureTags(f.tags);
   const primaryColor = fTags.length && tagColorMap[fTags[0]] ? tagColorMap[fTags[0]] : '#4b5563';
   const statusInfo = FEATURE_STATUSES.find(s => s.key === f.status) || { label: f.status, color: '#6b7280' };
   const priorityBadge = f.priority === 'high' ? '🟠' : f.priority === 'urgent' ? '🔴' : f.priority === 'low' ? '⚪' : '';
@@ -2361,8 +2526,8 @@ async function promoteFeature(featureId, projectId) {
 // --- Kanban Section ---
 
 function renderProjectKanban(p) {
+  if (!p.trello_board_id) return '';
   const isCollapsed = projectHubState.collapsedSections['kanban'];
-  const hasTrello = !!p.trello_board_id;
 
   return `
     <div class="project-section-card">
@@ -2373,11 +2538,9 @@ function renderProjectKanban(p) {
       </div>
       ${!isCollapsed ? `
         <div class="project-section-body project-kanban-body">
-          ${hasTrello ? `
-            <div id="project-board-container" class="board-container">
-              <div class="loading"><div class="spinner"></div> Loading board...</div>
-            </div>
-          ` : `<div class="project-section-empty">No Trello board linked. Edit project to connect one.</div>`}
+          <div id="project-board-container" class="board-container">
+            <div class="loading"><div class="spinner"></div> Loading board...</div>
+          </div>
         </div>
       ` : ''}
     </div>
@@ -2556,6 +2719,23 @@ async function openFeatureEditModal(featureId, projectId) {
   openFeatureModal(f, projectId);
 }
 
+function renderMarkdownLite(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^### (.+)$/gm, '<h4 class="md-h3">$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3 class="md-h2">$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2 class="md-h1">$1</h2>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code class="md-code">$1</code>')
+    .replace(/^(\d+)\. ✅ (.+)$/gm, '<div class="md-check"><span class="md-step-num">$1.</span> <span class="md-check-icon">✅</span> $2</div>')
+    .replace(/^(\d+)\. (.+)$/gm, '<div class="md-step"><span class="md-step-num">$1.</span> $2</div>')
+    .replace(/^- ✅ (.+)$/gm, '<div class="md-check"><span class="md-check-icon">✅</span> $1</div>')
+    .replace(/^- (.+)$/gm, '<div class="md-bullet">$1</div>')
+    .replace(/\n{2,}/g, '<div class="md-break"></div>')
+    .replace(/\n/g, '\n');
+}
+
 function openFeatureModal(feature, projectId) {
   const f = feature || {};
   const isNew = !feature;
@@ -2566,7 +2746,7 @@ function openFeatureModal(feature, projectId) {
   overlay.id = 'feature-modal';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = `
-    <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal feature-modal-large" onclick="event.stopPropagation()">
       <div class="modal-header">
         <h3>${isNew ? 'New Feature' : 'Edit Feature'}</h3>
         <button class="modal-close" onclick="document.getElementById('feature-modal').remove()">&times;</button>
@@ -2574,35 +2754,47 @@ function openFeatureModal(feature, projectId) {
       <div class="modal-body">
         <div class="modal-field"><label>Name</label><input type="text" class="modal-input" id="fe-name" value="${escapeHtml(f.name || '')}"></div>
         <div class="modal-field"><label>Description</label><textarea class="modal-textarea" id="fe-desc" rows="3">${escapeHtml(f.description || '')}</textarea></div>
-        <div class="modal-field"><label>Status</label>
-          <select class="modal-select" id="fe-status">
-            ${FEATURE_STATUSES.map(s => `<option value="${s.key}" ${f.status === s.key ? 'selected' : ''}>${s.label}</option>`).join('')}
-          </select>
+        <div class="feature-modal-row">
+          <div class="modal-field" style="flex:1"><label>Status</label>
+            <select class="modal-select" id="fe-status">
+              ${FEATURE_STATUSES.map(s => `<option value="${s.key}" ${f.status === s.key ? 'selected' : ''}>${s.label}</option>`).join('')}
+            </select>
+          </div>
+          <div class="modal-field" style="flex:1"><label>Priority</label>
+            <select class="modal-select" id="fe-priority">
+              <option value="low" ${f.priority === 'low' ? 'selected' : ''}>Low</option>
+              <option value="normal" ${f.priority === 'normal' || !f.priority ? 'selected' : ''}>Normal</option>
+              <option value="high" ${f.priority === 'high' ? 'selected' : ''}>High</option>
+              <option value="urgent" ${f.priority === 'urgent' ? 'selected' : ''}>Urgent</option>
+            </select>
+          </div>
         </div>
-        <div class="modal-field" style="display:flex;gap:0.75rem">
-          <div style="flex:1"><label>Version Target</label><input type="text" class="modal-input" id="fe-vertarget" value="${escapeHtml(f.version_target || '')}"></div>
-          <div style="flex:1"><label>Version Shipped</label><input type="text" class="modal-input" id="fe-vershipped" value="${escapeHtml(f.version_shipped || '')}"></div>
+        <div class="feature-modal-row">
+          <div class="modal-field" style="flex:1"><label>Version Target</label><input type="text" class="modal-input" id="fe-vertarget" value="${escapeHtml(f.version_target || '')}"></div>
+          <div class="modal-field" style="flex:1"><label>Version Shipped</label><input type="text" class="modal-input" id="fe-vershipped" value="${escapeHtml(f.version_shipped || '')}"></div>
         </div>
-        <div class="modal-field"><label>Priority</label>
-          <select class="modal-select" id="fe-priority">
-            <option value="low" ${f.priority === 'low' ? 'selected' : ''}>Low</option>
-            <option value="normal" ${f.priority === 'normal' || !f.priority ? 'selected' : ''}>Normal</option>
-            <option value="high" ${f.priority === 'high' ? 'selected' : ''}>High</option>
-            <option value="urgent" ${f.priority === 'urgent' ? 'selected' : ''}>Urgent</option>
-          </select>
+        <div class="feature-modal-row">
+          <div class="modal-field" style="flex:1"><label>Tags (comma-separated)</label><input type="text" class="modal-input" id="fe-tags" value="${escapeHtml(parseFeatureTags(f.tags).join(', '))}"></div>
+          <div class="modal-field" style="flex:1"><label>Source</label><input type="text" class="modal-input" id="fe-source" value="${escapeHtml(f.source || '')}" placeholder="e.g. user request, brainstorm, competitor"></div>
         </div>
-        <div class="modal-field"><label>Tags (comma-separated)</label><input type="text" class="modal-input" id="fe-tags" value="${escapeHtml(f.tags || '')}"></div>
-        <div class="modal-field"><label>Source</label><input type="text" class="modal-input" id="fe-source" value="${escapeHtml(f.source || '')}" placeholder="e.g. user request, brainstorm, competitor"></div>
         <div class="modal-field">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
-            <label style="margin:0">Claude Code Prompt</label>
-            ${f.prompt ? '<button class="prompt-copy-btn" onclick="copyFeaturePrompt(this)">📋 Copy</button>' : ''}
+            <label style="margin:0">🤖 Claude Code Prompt</label>
+            <div style="display:flex;gap:0.4rem">
+              ${f.prompt ? '<button class="prompt-copy-btn" onclick="copyFeaturePrompt(this)">📋 Copy</button>' : ''}
+              <button class="prompt-copy-btn" id="fe-prompt-toggle" onclick="togglePromptEdit(\'prompt\')">✏️ Edit</button>
+            </div>
           </div>
-          <textarea class="modal-textarea prompt-textarea" id="fe-prompt" rows="6" placeholder="Paste a detailed prompt for Claude Code to implement this feature...">${escapeHtml(f.prompt || '')}</textarea>
+          <div class="feature-rendered-box" id="fe-prompt-rendered" style="${f.prompt ? '' : 'display:none'}">${renderMarkdownLite(f.prompt || '')}</div>
+          <textarea class="modal-textarea prompt-textarea" id="fe-prompt" rows="8" style="${f.prompt ? 'display:none' : ''}" placeholder="Paste a detailed prompt for Claude Code to implement this feature...">${escapeHtml(f.prompt || '')}</textarea>
         </div>
         <div class="modal-field">
-          <label>🧪 Testing Checklist</label>
-          <textarea class="modal-textarea" id="fe-testing" rows="4" placeholder="What to test after implementation...">${escapeHtml(f.testing || '')}</textarea>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem">
+            <label style="margin:0">🧪 Testing Checklist</label>
+            <button class="prompt-copy-btn" id="fe-testing-toggle" onclick="togglePromptEdit(\'testing\')">✏️ Edit</button>
+          </div>
+          <div class="feature-rendered-box testing-rendered" id="fe-testing-rendered" style="${f.testing ? '' : 'display:none'}">${renderMarkdownLite(f.testing || '')}</div>
+          <textarea class="modal-textarea" id="fe-testing" rows="6" style="${f.testing ? 'display:none' : ''}" placeholder="What to test after implementation...">${escapeHtml(f.testing || '')}</textarea>
         </div>
       </div>
       <div class="modal-actions">
@@ -2614,6 +2806,22 @@ function openFeatureModal(feature, projectId) {
   `;
   document.body.appendChild(overlay);
   overlay.style.display = 'flex';
+}
+
+function togglePromptEdit(field) {
+  const rendered = document.getElementById(`fe-${field}-rendered`);
+  const textarea = document.getElementById(`fe-${field}`);
+  const btn = document.getElementById(`fe-${field}-toggle`);
+  if (textarea.style.display === 'none') {
+    textarea.style.display = '';
+    rendered.style.display = 'none';
+    btn.textContent = '👁 View';
+  } else {
+    rendered.innerHTML = renderMarkdownLite(textarea.value);
+    rendered.style.display = '';
+    textarea.style.display = 'none';
+    btn.textContent = '✏️ Edit';
+  }
 }
 
 async function saveFeatureModal(featureId, projectId) {
@@ -2641,7 +2849,7 @@ async function saveFeatureModal(featureId, projectId) {
     });
   }
   document.getElementById('feature-modal')?.remove();
-  selectProject(projectId);
+  await selectProjectPreserveScroll(projectId);
 }
 
 // --- Feature drag-and-drop ---
@@ -2701,10 +2909,31 @@ async function featureDrop(event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updateBody)
     });
-    selectProject(projectId);
+    await selectProjectPreserveScroll(projectId);
   } catch (err) {
     console.error('Feature drop error:', err);
   }
+}
+
+async function selectProjectPreserveScroll(id) {
+  const content = document.getElementById('project-hub-content');
+  const scrollTop = content ? content.scrollTop : 0;
+  const mainEl = document.querySelector('.main-content');
+  const mainScroll = mainEl ? mainEl.scrollTop : window.scrollY;
+
+  projectHubState.selectedId = id;
+  projectHubState.showOverview = false;
+  const data = await fetchJSON(`/api/projects/${id}`);
+  if (!data || data.error) return;
+  projectHubState.projectData = data;
+  renderProjectHub();
+
+  // Restore scroll
+  requestAnimationFrame(() => {
+    if (content) content.scrollTop = scrollTop;
+    if (mainEl) mainEl.scrollTop = mainScroll;
+    else window.scrollTo(0, mainScroll);
+  });
 }
 
 function copyFeaturePrompt(btn) {
@@ -2734,7 +2963,7 @@ async function deleteFeatureModal(featureId, projectId) {
   if (!confirm('Delete this feature?')) return;
   await fetchJSON(`/api/projects/${projectId}/features/${featureId}`, { method: 'DELETE' });
   document.getElementById('feature-modal')?.remove();
-  selectProject(projectId);
+  await selectProjectPreserveScroll(projectId);
 }
 
 // --- Modal: Feedback ---
@@ -2881,15 +3110,26 @@ function renderMarkdown(md) {
 
 // ==================== IDEAS ====================
 
+let ideasState = { ideas: [], selectedId: null };
+
 async function renderIdeas(container) {
   container.innerHTML = `
     <div class="view-container ideas-page">
-      <div class="view-header">
-        <h2>💡 Ideas</h2>
-        <button class="btn-move" onclick="openIdeaModal()">+ New Idea</button>
+      <div class="ideas-list-panel" id="ideas-list-panel">
+        <div class="ideas-list-header">
+          <h2>💡 Ideas</h2>
+          <button class="btn-move" onclick="openNewIdeaModal()">+ New</button>
+        </div>
+        <div class="ideas-list" id="ideas-list">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
       </div>
-      <div class="ideas-grid" id="ideas-grid">
-        <div class="loading"><div class="spinner"></div> Loading ideas...</div>
+      <div class="ideas-detail-panel" id="ideas-detail-panel">
+        <div class="docs-empty-state" style="padding:3rem;text-align:center">
+          <div class="placeholder-icon">💡</div>
+          <div class="placeholder-text">Select an idea</div>
+          <div class="placeholder-sub">Click one to see the full breakdown</div>
+        </div>
       </div>
     </div>
   `;
@@ -2897,69 +3137,130 @@ async function renderIdeas(container) {
 }
 
 async function loadIdeas() {
-  const ideas = await fetchJSON('/api/ideas');
-  const grid = document.getElementById('ideas-grid');
-  if (!grid) return;
+  ideasState.ideas = await fetchJSON('/api/ideas') || [];
+  renderIdeaList();
+  if (ideasState.selectedId) openIdeaDetail(ideasState.selectedId);
+}
 
-  const active = (ideas || []).filter(i => i.status === 'active');
-  const archived = (ideas || []).filter(i => i.status === 'archived');
-  const promoted = (ideas || []).filter(i => i.status === 'promoted');
+function renderIdeaList() {
+  const list = document.getElementById('ideas-list');
+  if (!list) return;
+
+  const active = ideasState.ideas.filter(i => i.status === 'active');
+  const archived = ideasState.ideas.filter(i => i.status === 'archived');
+  const promoted = ideasState.ideas.filter(i => i.status === 'promoted');
 
   if (!active.length && !archived.length && !promoted.length) {
-    grid.innerHTML = `<div class="docs-empty-state" style="padding:3rem;text-align:center;grid-column:1/-1">
-      <div class="placeholder-icon">💡</div>
-      <div class="placeholder-text">No ideas yet</div>
-      <div class="placeholder-sub">Click "+ New Idea" to capture your first one</div>
-    </div>`;
+    list.innerHTML = `<div class="ideas-list-empty">No ideas yet</div>`;
     return;
   }
 
-  let html = active.map(i => renderIdeaCard(i)).join('');
+  let html = active.map(i => renderIdeaListItem(i)).join('');
 
   if (promoted.length) {
     html += `<div class="ideas-divider" onclick="this.nextElementSibling.classList.toggle('collapsed')">
       <span>🚀 Promoted (${promoted.length})</span><span class="chevron">▸</span>
-    </div>
-    <div class="ideas-section collapsed">${promoted.map(i => renderIdeaCard(i)).join('')}</div>`;
+    </div><div class="ideas-section collapsed">${promoted.map(i => renderIdeaListItem(i)).join('')}</div>`;
   }
-
   if (archived.length) {
     html += `<div class="ideas-divider" onclick="this.nextElementSibling.classList.toggle('collapsed')">
       <span>📦 Archived (${archived.length})</span><span class="chevron">▸</span>
-    </div>
-    <div class="ideas-section collapsed">${archived.map(i => renderIdeaCard(i)).join('')}</div>`;
+    </div><div class="ideas-section collapsed">${archived.map(i => renderIdeaListItem(i)).join('')}</div>`;
   }
-
-  grid.innerHTML = html;
+  list.innerHTML = html;
 }
 
-function renderIdeaCard(idea) {
+function renderIdeaListItem(idea) {
   const tags = idea.tags ? idea.tags.split(',').map(t => t.trim()) : [];
-  const statusClass = idea.status === 'archived' ? 'archived' : idea.status === 'promoted' ? 'promoted' : '';
-  const age = getTimeAgo(idea.created_at);
+  const effort = idea.effort ? `<span class="idea-effort-badge">${escapeHtml(idea.effort)}</span>` : '';
+  const isSelected = ideasState.selectedId === idea.id;
 
   return `
-    <div class="idea-card ${statusClass}" onclick="openIdeaModal(${idea.id})">
-      <div class="idea-card-header">
-        <span class="idea-card-title">${escapeHtml(idea.title)}</span>
-        <div class="idea-card-actions" onclick="event.stopPropagation()">
+    <div class="idea-list-item ${idea.status === 'archived' ? 'archived' : ''} ${idea.status === 'promoted' ? 'promoted' : ''} ${isSelected ? 'active' : ''}" onclick="openIdeaDetail(${idea.id})">
+      <div class="idea-list-title">${escapeHtml(idea.title)}</div>
+      <div class="idea-list-meta">
+        ${tags.slice(0, 2).map(t => `<span class="idea-tag">${escapeHtml(t)}</span>`).join('')}
+        ${effort}
+      </div>
+    </div>
+  `;
+}
+
+async function openIdeaDetail(id) {
+  ideasState.selectedId = id;
+  renderIdeaList(); // update active highlight
+
+  const panel = document.getElementById('ideas-detail-panel');
+  if (!panel) return;
+
+  const idea = ideasState.ideas.find(i => i.id === id);
+  if (!idea) { panel.innerHTML = '<div class="docs-empty-state">Idea not found</div>'; return; }
+
+  const tags = idea.tags ? idea.tags.split(',').map(t => t.trim()) : [];
+
+  panel.innerHTML = `
+    <div class="idea-detail">
+      <div class="idea-detail-header">
+        <h1 class="idea-detail-title">${escapeHtml(idea.title)}</h1>
+        <div class="idea-detail-actions">
+          <button class="btn-doc-action" onclick="openEditIdeaModal(${idea.id})">✏️ Edit</button>
           ${idea.status === 'active' ? `
-            <button class="idea-action-btn" onclick="promoteIdea(${idea.id})" title="Promote to project">🚀</button>
-            <button class="idea-action-btn" onclick="archiveIdea(${idea.id})" title="Archive">📦</button>
+            <button class="btn-move" onclick="promoteIdea(${idea.id})">🚀 Promote</button>
+            <button class="btn-archive" onclick="archiveIdea(${idea.id})">📦 Archive</button>
           ` : idea.status === 'archived' ? `
-            <button class="idea-action-btn" onclick="restoreIdea(${idea.id})" title="Restore">♻️</button>
-            <button class="idea-action-btn delete" onclick="deleteIdea(${idea.id})" title="Delete permanently">🗑</button>
-          ` : `
-            <span class="idea-promoted-badge">→ ${idea.project_id || 'project'}</span>
-          `}
+            <button class="btn-move" onclick="restoreIdea(${idea.id})">♻️ Restore</button>
+            <button class="btn-archive" style="color:#ef4444" onclick="deleteIdea(${idea.id})">🗑 Delete</button>
+          ` : ''}
         </div>
       </div>
-      ${idea.description ? `<div class="idea-card-desc">${escapeHtml(idea.description)}</div>` : ''}
-      <div class="idea-card-footer">
+      <div class="idea-detail-meta">
         ${tags.map(t => `<span class="idea-tag">${escapeHtml(t)}</span>`).join('')}
+        ${idea.effort ? `<span class="idea-effort-pill">${escapeHtml(idea.effort)}</span>` : ''}
+        ${idea.feasibility ? `<span class="idea-feasibility-pill">${escapeHtml(idea.feasibility)}</span>` : ''}
         ${idea.source ? `<span class="idea-source">via ${escapeHtml(idea.source)}</span>` : ''}
-        <span class="idea-age">${age}</span>
       </div>
+      ${idea.description ? `<div class="idea-detail-section"><p class="idea-detail-desc">${escapeHtml(idea.description)}</p></div>` : ''}
+      ${idea.pain_point ? `
+        <div class="idea-detail-section">
+          <h3>🎯 The Problem</h3>
+          <p>${escapeHtml(idea.pain_point)}</p>
+        </div>
+      ` : ''}
+      ${idea.how_it_works ? `
+        <div class="idea-detail-section">
+          <h3>⚙️ How It Works</h3>
+          <p>${escapeHtml(idea.how_it_works)}</p>
+        </div>
+      ` : ''}
+      ${idea.why_it_works ? `
+        <div class="idea-detail-section">
+          <h3>📈 Why It Could Work</h3>
+          <p>${escapeHtml(idea.why_it_works)}</p>
+        </div>
+      ` : ''}
+      ${idea.revenue_model ? `
+        <div class="idea-detail-section">
+          <h3>💰 Revenue Model</h3>
+          <p>${escapeHtml(idea.revenue_model)}</p>
+        </div>
+      ` : ''}
+      ${idea.competition ? `
+        <div class="idea-detail-section">
+          <h3>🏟️ Competition</h3>
+          <p>${escapeHtml(idea.competition)}</p>
+        </div>
+      ` : ''}
+      ${idea.synergy ? `
+        <div class="idea-detail-section">
+          <h3>🔗 Synergy</h3>
+          <p>${escapeHtml(idea.synergy)}</p>
+        </div>
+      ` : ''}
+      ${!idea.pain_point && !idea.how_it_works && !idea.why_it_works && !idea.revenue_model && !idea.competition ? `
+        <div class="idea-detail-empty">
+          <p>This idea hasn't been fleshed out yet. Click ✏️ Edit to add details.</p>
+        </div>
+      ` : ''}
     </div>
   `;
 }
@@ -2975,20 +3276,13 @@ function getTimeAgo(dateStr) {
   return d.toLocaleDateString();
 }
 
-function openIdeaModal(ideaId) {
-  let idea = null;
-  if (ideaId) {
-    // Find from loaded ideas
-    fetchJSON(`/api/ideas`).then(ideas => {
-      idea = ideas.find(i => i.id === ideaId);
-      showIdeaModal(idea);
-    });
-  } else {
-    showIdeaModal(null);
-  }
+function openNewIdeaModal() { showIdeaEditModal(null); }
+function openEditIdeaModal(id) {
+  const idea = ideasState.ideas.find(i => i.id === id);
+  showIdeaEditModal(idea);
 }
 
-function showIdeaModal(idea) {
+function showIdeaEditModal(idea) {
   const f = idea || {};
   const isNew = !idea;
   const overlay = document.createElement('div');
@@ -2996,20 +3290,39 @@ function showIdeaModal(idea) {
   overlay.id = 'idea-modal';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = `
-    <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal modal-wide" onclick="event.stopPropagation()">
       <div class="modal-header">
         <h3>${isNew ? '💡 New Idea' : '✏️ Edit Idea'}</h3>
         <button class="modal-close" onclick="document.getElementById('idea-modal').remove()">&times;</button>
       </div>
       <div class="modal-body">
         <div class="modal-field"><label>Title</label><input type="text" class="modal-input" id="idea-title" value="${escapeHtml(f.title || '')}" placeholder="What's the idea?"></div>
-        <div class="modal-field"><label>Description</label><textarea class="modal-textarea" id="idea-desc" rows="4" placeholder="Quick description — what problem does it solve?">${escapeHtml(f.description || '')}</textarea></div>
-        <div class="modal-field"><label>Tags (comma-separated)</label><input type="text" class="modal-input" id="idea-tags" value="${escapeHtml(f.tags || '')}" placeholder="e.g. iOS, productivity, AI"></div>
-        <div class="modal-field"><label>Source</label><input type="text" class="modal-input" id="idea-source" value="${escapeHtml(f.source || '')}" placeholder="e.g. Reddit, brainstorm, user feedback"></div>
+        <div class="modal-field"><label>One-liner</label><input type="text" class="modal-input" id="idea-desc" value="${escapeHtml(f.description || '')}" placeholder="Quick concept summary"></div>
+        <div class="modal-two-col">
+          <div class="modal-field"><label>Tags</label><input type="text" class="modal-input" id="idea-tags" value="${escapeHtml(f.tags || '')}" placeholder="iOS, productivity, AI"></div>
+          <div class="modal-field"><label>Source</label><input type="text" class="modal-input" id="idea-source" value="${escapeHtml(f.source || '')}" placeholder="Reddit, brainstorm"></div>
+        </div>
+        <div class="modal-two-col">
+          <div class="modal-field"><label>Effort</label>
+            <select class="modal-select" id="idea-effort">
+              <option value="" ${!f.effort ? 'selected' : ''}>—</option>
+              <option value="🟢 Weekend" ${f.effort === '🟢 Weekend' ? 'selected' : ''}>🟢 Weekend</option>
+              <option value="🟡 1-2 weeks" ${f.effort === '🟡 1-2 weeks' ? 'selected' : ''}>🟡 1-2 weeks</option>
+              <option value="🟠 2-4 weeks" ${f.effort === '🟠 2-4 weeks' ? 'selected' : ''}>🟠 2-4 weeks</option>
+              <option value="🔴 Month+" ${f.effort === '🔴 Month+' ? 'selected' : ''}>🔴 Month+</option>
+            </select>
+          </div>
+          <div class="modal-field"><label>Feasibility</label><input type="text" class="modal-input" id="idea-feasibility" value="${escapeHtml(f.feasibility || '')}" placeholder="Easy / Medium / Hard"></div>
+        </div>
+        <div class="modal-field"><label>🎯 The Problem</label><textarea class="modal-textarea" id="idea-pain" rows="3" placeholder="What pain point does this solve? Include evidence (Reddit posts, complaints, etc.)">${escapeHtml(f.pain_point || '')}</textarea></div>
+        <div class="modal-field"><label>⚙️ How It Works</label><textarea class="modal-textarea" id="idea-how" rows="3" placeholder="Core features — what does the app actually do?">${escapeHtml(f.how_it_works || '')}</textarea></div>
+        <div class="modal-field"><label>📈 Why It Could Work</label><textarea class="modal-textarea" id="idea-why" rows="3" placeholder="Market gap, no good existing solution, growing demand...">${escapeHtml(f.why_it_works || '')}</textarea></div>
+        <div class="modal-field"><label>💰 Revenue Model</label><input type="text" class="modal-input" id="idea-revenue" value="${escapeHtml(f.revenue_model || '')}" placeholder="Freemium, subscription, one-time, ads"></div>
+        <div class="modal-field"><label>🏟️ Competition</label><textarea class="modal-textarea" id="idea-comp" rows="2" placeholder="What exists and why it's not good enough">${escapeHtml(f.competition || '')}</textarea></div>
+        <div class="modal-field"><label>🔗 Synergy</label><input type="text" class="modal-input" id="idea-synergy" value="${escapeHtml(f.synergy || '')}" placeholder="Connection to Sown, Adventune, Limelee..."></div>
       </div>
       <div class="modal-actions">
         <button class="btn-move" onclick="saveIdea(${f.id || 'null'})">${isNew ? 'Create' : 'Save'}</button>
-        ${!isNew ? `<button class="btn-archive" onclick="deleteIdea(${f.id}); document.getElementById('idea-modal')?.remove()">🗑 Delete</button>` : ''}
         <button class="btn-archive" onclick="document.getElementById('idea-modal').remove()">Cancel</button>
       </div>
     </div>
@@ -3024,7 +3337,15 @@ async function saveIdea(ideaId) {
     title: document.getElementById('idea-title').value,
     description: document.getElementById('idea-desc').value || null,
     tags: document.getElementById('idea-tags').value || null,
-    source: document.getElementById('idea-source').value || null
+    source: document.getElementById('idea-source').value || null,
+    pain_point: document.getElementById('idea-pain').value || null,
+    how_it_works: document.getElementById('idea-how').value || null,
+    why_it_works: document.getElementById('idea-why').value || null,
+    feasibility: document.getElementById('idea-feasibility').value || null,
+    effort: document.getElementById('idea-effort').value || null,
+    revenue_model: document.getElementById('idea-revenue').value || null,
+    competition: document.getElementById('idea-comp').value || null,
+    synergy: document.getElementById('idea-synergy').value || null
   };
   if (!body.title) return alert('Title is required');
 
@@ -3034,28 +3355,33 @@ async function saveIdea(ideaId) {
     await fetchJSON('/api/ideas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }
   document.getElementById('idea-modal')?.remove();
-  loadIdeas();
+  await loadIdeas();
+  if (ideaId) openIdeaDetail(ideaId);
 }
 
 async function archiveIdea(id) {
   await fetchJSON(`/api/ideas/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'archived' }) });
-  loadIdeas();
+  ideasState.selectedId = null;
+  await loadIdeas();
+  document.getElementById('ideas-detail-panel').innerHTML = '<div class="docs-empty-state" style="padding:3rem;text-align:center"><div class="placeholder-icon">💡</div><div class="placeholder-text">Select an idea</div></div>';
 }
 
 async function restoreIdea(id) {
   await fetchJSON(`/api/ideas/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'active' }) });
-  loadIdeas();
+  await loadIdeas();
+  openIdeaDetail(id);
 }
 
 async function deleteIdea(id) {
   if (!confirm('Permanently delete this idea?')) return;
   await fetchJSON(`/api/ideas/${id}`, { method: 'DELETE' });
-  loadIdeas();
+  ideasState.selectedId = null;
+  await loadIdeas();
+  document.getElementById('ideas-detail-panel').innerHTML = '<div class="docs-empty-state" style="padding:3rem;text-align:center"><div class="placeholder-icon">💡</div><div class="placeholder-text">Select an idea</div></div>';
 }
 
 async function promoteIdea(id) {
-  const ideas = await fetchJSON('/api/ideas');
-  const idea = ideas.find(i => i.id === id);
+  const idea = ideasState.ideas.find(i => i.id === id);
   if (!idea) return;
 
   const overlay = document.createElement('div');
@@ -3097,8 +3423,7 @@ async function executePromote(ideaId) {
   const result = await fetchJSON(`/api/ideas/${ideaId}/promote`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   document.getElementById('promote-modal')?.remove();
   if (result?.project_id) {
-    loadIdeas();
-    // Optionally navigate to the new project
+    await loadIdeas();
     if (confirm('Project created! View it now?')) {
       loadView('projects');
       setTimeout(() => selectProject(result.project_id), 500);
@@ -4219,3 +4544,520 @@ updateTimestamp();
 // Periodic refreshes
 setInterval(periodicRefresh, REFRESH_INTERVAL);
 setInterval(refreshAgentSidebar, AGENT_REFRESH_INTERVAL);
+
+// ===== FINANCE TAB =====
+
+const SPENDING_CATEGORIES = [
+  { value: 'food', label: '🍔 Food' },
+  { value: 'transport', label: '🚌 Transport' },
+  { value: 'entertainment', label: '🎮 Entertainment' },
+  { value: 'shopping', label: '🛒 Shopping' },
+  { value: 'health', label: '💊 Health' },
+  { value: 'eating_out', label: '☕ Eating Out' },
+  { value: 'home', label: '🏠 Home' },
+  { value: 'subscriptions', label: '📱 Subscriptions' },
+  { value: 'other', label: '🎯 Other' }
+];
+
+const EXPENSE_CATEGORIES = ['Travel', 'Meals', 'Software', 'Equipment', 'Other'];
+
+let financeState = {
+  budget: null,
+  settings: null,
+  recurring: [],
+  todaySpending: [],
+  monthSpending: [],
+  expenses: [],
+  expenseFilter: 'all',
+  editingRecurringId: null,
+  openRecurringMenu: null
+};
+
+function getCategoryEmoji(cat) {
+  const found = SPENDING_CATEGORIES.find(c => c.value === cat);
+  return found ? found.label : cat || '🎯 Other';
+}
+
+function getCategoryBadge(cat) {
+  const colors = {
+    food: '#f97316', transport: '#3b82f6', entertainment: '#a855f7',
+    shopping: '#22c55e', health: '#ef4444', eating_out: '#f59e0b',
+    home: '#6366f1', subscriptions: '#ec4899', other: '#6b7280'
+  };
+  const color = colors[cat] || '#6b7280';
+  return `<span class="finance-cat-badge" style="background:${color}20;color:${color};border:1px solid ${color}40">${getCategoryEmoji(cat)}</span>`;
+}
+
+async function renderFinance(container) {
+  container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading finance...</div>';
+
+  // Load all data in parallel
+  const [settings, recurring, todaySpending, budget, expenses] = await Promise.all([
+    fetchJSON('/api/finance/settings'),
+    fetchJSON('/api/finance/recurring'),
+    fetchJSON('/api/finance/spending/today'),
+    fetchJSON('/api/finance/budget/latest'),
+    fetchJSON('/api/finance/expenses')
+  ]);
+
+  financeState.settings = settings;
+  financeState.recurring = recurring || [];
+  financeState.todaySpending = todaySpending || [];
+  financeState.budget = budget;
+  financeState.expenses = expenses || [];
+
+  // Get current month spending
+  const now = new Date();
+  const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const monthSpending = await fetchJSON(`/api/finance/spending?month=${monthStr}`);
+  financeState.monthSpending = monthSpending || [];
+
+  renderFinanceContent(container);
+}
+
+function renderFinanceContent(container) {
+  const b = financeState.budget;
+  const s = financeState.settings || {};
+  const dailyStr = b ? `£${b.daily_allowance.toFixed(2)}` : '£--.--';
+  const calcTime = b ? new Date(b.calculated_at).toLocaleString('en-GB') : 'Never';
+
+  // Progress bar calc
+  const totalBudget = (s.monthly_income || 0) - (b?.total_fixed || 0) - (s.savings_target || 0);
+  const spentPct = totalBudget > 0 ? Math.min(100, ((b?.total_spent || 0) / totalBudget) * 100) : 0;
+  const progressColor = spentPct > 90 ? 'var(--red)' : spentPct > 70 ? 'var(--orange)' : 'var(--green)';
+
+  const todayTotal = financeState.todaySpending.reduce((s, e) => s + e.amount, 0);
+
+  container.innerHTML = `
+    <div class="finance-view">
+      <!-- Budget Overview -->
+      <div class="finance-budget-card">
+        <div class="finance-budget-hero">
+          <div class="finance-daily-amount ${(b?.daily_allowance || 0) < 0 ? 'negative' : ''}">${dailyStr}</div>
+          <div class="finance-daily-label">per day</div>
+          <div class="finance-cycle-info">${b?.cycle_start && b?.cycle_end ? `Pay cycle: ${new Date(b.cycle_start+'T00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'})} → ${new Date(b.cycle_end+'T00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'})}` : `Pay day: ${s.pay_day || 25}th`}</div>
+          <div class="finance-calc-row">
+            <span class="finance-calc-time">Last calculated: ${calcTime}</span>
+            <button class="btn-doc-action" onclick="recalcBudget()">🔄 Recalculate</button>
+          </div>
+        </div>
+        <div class="finance-progress-bar">
+          <div class="finance-progress-fill" style="width:${spentPct}%;background:${progressColor}"></div>
+        </div>
+        <div class="finance-progress-label">£${(b?.total_spent || 0).toFixed(2)} spent of £${totalBudget.toFixed(2)} available</div>
+        <div class="finance-stats-row">
+          <div class="finance-stat">
+            <span class="finance-stat-value">£${(s.monthly_income || 0).toFixed(0)}</span>
+            <span class="finance-stat-label">Income</span>
+          </div>
+          <div class="finance-stat">
+            <span class="finance-stat-value">£${(b?.total_fixed || 0).toFixed(0)}</span>
+            <span class="finance-stat-label">Fixed Costs</span>
+          </div>
+          <div class="finance-stat">
+            <span class="finance-stat-value">£${(s.savings_target || 0).toFixed(0)}</span>
+            <span class="finance-stat-label">Savings</span>
+          </div>
+          <div class="finance-stat">
+            <span class="finance-stat-value">£${(b?.total_spent || 0).toFixed(2)}</span>
+            <span class="finance-stat-label">Spent</span>
+          </div>
+          <div class="finance-stat">
+            <span class="finance-stat-value">${b?.days_remaining || '--'}</span>
+            <span class="finance-stat-label">Days Left</span>
+          </div>
+        </div>
+        <div class="finance-settings-row">
+          <button class="btn-doc-action" onclick="openFinanceSettings()">⚙️ Settings</button>
+        </div>
+      </div>
+
+      <!-- Settings (hidden by default) -->
+      <div class="finance-settings-panel" id="finance-settings-panel" style="display:none">
+        <div class="finance-card">
+          <h3>Finance Settings</h3>
+          <div class="finance-form-row">
+            <label>Monthly Income (£)</label>
+            <input type="number" id="fin-income" class="modal-input" value="${s.monthly_income || 0}" step="0.01">
+          </div>
+          <div class="finance-form-row">
+            <label>Savings Target (£)</label>
+            <input type="number" id="fin-savings" class="modal-input" value="${s.savings_target || 0}" step="0.01">
+          </div>
+          <div class="finance-form-row">
+            <label>Pay Day (day of month)</label>
+            <input type="number" id="fin-payday" class="modal-input" value="${s.pay_day || 25}" min="1" max="31" step="1">
+          </div>
+          <div class="finance-form-actions">
+            <button class="btn-move" onclick="saveFinanceSettings()">Save</button>
+            <button class="btn-archive" onclick="document.getElementById('finance-settings-panel').style.display='none'">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Two Column -->
+      <div class="finance-columns">
+        <!-- Left: Spending -->
+        <div class="finance-card">
+          <h3>💳 Spending Log</h3>
+          <div class="finance-quick-add">
+            <input type="number" id="spend-amount" class="modal-input" placeholder="£ Amount" step="0.01" style="width:100px">
+            <input type="text" id="spend-desc" class="modal-input" placeholder="Description" style="flex:1">
+            <select id="spend-cat" class="modal-select" style="width:140px">
+              ${SPENDING_CATEGORIES.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}
+            </select>
+            <button class="btn-move" onclick="addSpending()">Add</button>
+          </div>
+
+          <div class="finance-today-header">
+            <span>Today</span>
+            <span class="finance-today-total">£${todayTotal.toFixed(2)}</span>
+          </div>
+          <div class="finance-spending-list" id="finance-today-list">
+            ${renderSpendingItems(financeState.todaySpending)}
+          </div>
+
+          ${renderPreviousDaysSpending()}
+        </div>
+
+        <!-- Right: Recurring -->
+        <div class="finance-card">
+          <h3>🔄 Recurring Payments</h3>
+          <div class="finance-recurring-add">
+            <button class="btn-doc-action" onclick="showRecurringForm()">+ Add Payment</button>
+          </div>
+          <div id="recurring-form-area"></div>
+          <div class="finance-recurring-list" id="finance-recurring-list">
+            ${renderRecurringItems()}
+          </div>
+          <div class="finance-recurring-total">
+            Monthly Total: £${financeState.recurring.reduce((s, r) => s + r.amount, 0).toFixed(2)}
+          </div>
+        </div>
+      </div>
+
+      <!-- Work Expenses -->
+      <div class="finance-card finance-full-width">
+        <div class="finance-expenses-header">
+          <h3>💼 Work Expenses</h3>
+          <div class="finance-expenses-actions">
+            <button class="btn-doc-action" onclick="showExpenseForm()">+ Add Expense</button>
+            <button class="btn-doc-action" onclick="exportExpenses()">📥 Export CSV</button>
+          </div>
+        </div>
+        <div class="finance-expense-filters">
+          <button class="finance-filter-tab ${financeState.expenseFilter === 'all' ? 'active' : ''}" onclick="filterExpenses('all')">All</button>
+          <button class="finance-filter-tab ${financeState.expenseFilter === 'pending' ? 'active' : ''}" onclick="filterExpenses('pending')">Pending</button>
+          <button class="finance-filter-tab ${financeState.expenseFilter === 'submitted' ? 'active' : ''}" onclick="filterExpenses('submitted')">Submitted</button>
+          <button class="finance-filter-tab ${financeState.expenseFilter === 'reimbursed' ? 'active' : ''}" onclick="filterExpenses('reimbursed')">Reimbursed</button>
+        </div>
+        <div id="expense-form-area"></div>
+        <div class="finance-expenses-table" id="finance-expenses-table">
+          ${renderExpensesTable()}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSpendingItems(items) {
+  if (!items.length) return '<div class="finance-empty">No spending recorded</div>';
+  return items.map(item => `
+    <div class="finance-spending-item">
+      <div class="finance-spending-info">
+        ${getCategoryBadge(item.category)}
+        <span class="finance-spending-desc">${escapeHtml(item.description) || 'No description'}</span>
+      </div>
+      <div class="finance-spending-right">
+        <span class="finance-spending-amount">£${item.amount.toFixed(2)}</span>
+        <button class="finance-delete-btn" onclick="deleteSpending(${item.id})" title="Delete">×</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderPreviousDaysSpending() {
+  // Group month spending by date, excluding today
+  const today = new Date().toISOString().slice(0, 10);
+  const byDate = {};
+  for (const item of financeState.monthSpending) {
+    if (item.date === today) continue;
+    if (!byDate[item.date]) byDate[item.date] = [];
+    byDate[item.date].push(item);
+  }
+  const dates = Object.keys(byDate).sort().reverse();
+  if (!dates.length) return '';
+
+  return dates.map(date => {
+    const items = byDate[date];
+    const total = items.reduce((s, i) => s + i.amount, 0);
+    const d = new Date(date + 'T12:00:00');
+    const label = d.toLocaleDateString('en-GB', { weekday: 'short', month: 'short', day: 'numeric' });
+    return `
+      <details class="finance-day-group">
+        <summary class="finance-day-summary">
+          <span>${label}</span>
+          <span>£${total.toFixed(2)}</span>
+        </summary>
+        <div class="finance-spending-list">
+          ${renderSpendingItems(items)}
+        </div>
+      </details>
+    `;
+  }).join('');
+}
+
+function renderRecurringItems() {
+  if (!financeState.recurring.length) return '<div class="finance-empty">No recurring payments</div>';
+  const today = new Date().getDate();
+  return financeState.recurring.map(r => {
+    const isPast = r.day_of_month && r.day_of_month <= today;
+    return `
+      <div class="finance-recurring-item ${isPast ? 'paid' : 'upcoming'}">
+        <div class="finance-recurring-info">
+          <span class="finance-recurring-name">${escapeHtml(r.name)}</span>
+          <span class="finance-recurring-day">${r.day_of_month ? `Day ${r.day_of_month}` : '—'}</span>
+          ${r.category ? getCategoryBadge(r.category) : ''}
+        </div>
+        <div class="finance-recurring-right">
+          <span class="finance-recurring-amount">£${r.amount.toFixed(2)}</span>
+          <span class="finance-recurring-status">${isPast ? '✅' : '⏳'}</span>
+          <div class="finance-recurring-menu-wrap">
+            <button class="finance-menu-btn" onclick="toggleRecurringMenu(event, ${r.id})">⋮</button>
+            <div class="finance-menu-dropdown" id="recurring-menu-${r.id}" style="display:none">
+              <button onclick="editRecurring(${r.id})">✏️ Edit</button>
+              <button onclick="deleteRecurring(${r.id})">🗑 Delete</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderExpensesTable() {
+  let items = financeState.expenses;
+  if (financeState.expenseFilter !== 'all') {
+    items = items.filter(e => e.status === financeState.expenseFilter);
+  }
+  if (!items.length) return '<div class="finance-empty">No expenses</div>';
+
+  const statusColors = { pending: 'var(--orange)', submitted: 'var(--blue)', reimbursed: 'var(--green)' };
+  const nextStatus = { pending: 'submitted', submitted: 'reimbursed', reimbursed: 'pending' };
+
+  return `<table class="finance-table">
+    <thead><tr><th>Date</th><th>Amount</th><th>Description</th><th>Category</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+      ${items.map(e => `<tr>
+        <td>${e.date}</td>
+        <td>£${e.amount.toFixed(2)}</td>
+        <td>${escapeHtml(e.description) || '—'}</td>
+        <td>${escapeHtml(e.category) || '—'}</td>
+        <td><span class="finance-status-badge" style="background:${statusColors[e.status] || statusColors.pending}20;color:${statusColors[e.status] || statusColors.pending};cursor:pointer" onclick="cycleExpenseStatus(${e.id},'${nextStatus[e.status] || 'pending'}')">${e.status}</span></td>
+        <td><button class="finance-delete-btn" onclick="deleteExpense(${e.id})">🗑</button></td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+// Finance Actions
+
+async function recalcBudget() {
+  const b = await fetchJSON('/api/finance/budget');
+  financeState.budget = b;
+  // Also reload settings
+  financeState.settings = await fetchJSON('/api/finance/settings');
+  renderFinanceContent(document.getElementById('main-content'));
+}
+
+function openFinanceSettings() {
+  const panel = document.getElementById('finance-settings-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+async function saveFinanceSettings() {
+  const income = parseFloat(document.getElementById('fin-income').value) || 0;
+  const savings = parseFloat(document.getElementById('fin-savings').value) || 0;
+  const payDay = parseInt(document.getElementById('fin-payday').value) || 25;
+  await fetch('/api/finance/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ monthly_income: income, savings_target: savings, pay_day: payDay })
+  });
+  document.getElementById('finance-settings-panel').style.display = 'none';
+  await recalcBudget();
+}
+
+async function addSpending() {
+  const amount = parseFloat(document.getElementById('spend-amount').value);
+  const desc = document.getElementById('spend-desc').value.trim();
+  const cat = document.getElementById('spend-cat').value;
+  if (!amount || amount <= 0) return;
+
+  await fetch('/api/finance/spending', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: new Date().toISOString().slice(0, 10), amount, description: desc, category: cat })
+  });
+
+  document.getElementById('spend-amount').value = '';
+  document.getElementById('spend-desc').value = '';
+  await refreshFinanceSpending();
+}
+
+async function deleteSpending(id) {
+  await fetch(`/api/finance/spending/${id}`, { method: 'DELETE' });
+  await refreshFinanceSpending();
+}
+
+async function refreshFinanceSpending() {
+  const now = new Date();
+  const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [todaySpending, monthSpending] = await Promise.all([
+    fetchJSON('/api/finance/spending/today'),
+    fetchJSON(`/api/finance/spending?month=${monthStr}`)
+  ]);
+  financeState.todaySpending = todaySpending || [];
+  financeState.monthSpending = monthSpending || [];
+  renderFinanceContent(document.getElementById('main-content'));
+}
+
+function showRecurringForm(existing) {
+  const area = document.getElementById('recurring-form-area');
+  if (!area) return;
+  const r = existing || {};
+  area.innerHTML = `
+    <div class="finance-inline-form">
+      <input type="text" id="rec-name" class="modal-input" placeholder="Name" value="${escapeHtml(r.name || '')}" style="flex:1">
+      <input type="number" id="rec-amount" class="modal-input" placeholder="£" step="0.01" value="${r.amount || ''}" style="width:90px">
+      <input type="number" id="rec-day" class="modal-input" placeholder="Day" min="1" max="31" value="${r.day_of_month || ''}" style="width:70px">
+      <select id="rec-cat" class="modal-select" style="width:130px">
+        <option value="">Category</option>
+        ${SPENDING_CATEGORIES.map(c => `<option value="${c.value}" ${r.category === c.value ? 'selected' : ''}>${c.label}</option>`).join('')}
+      </select>
+      <button class="btn-move" onclick="saveRecurring(${r.id || 'null'})">${r.id ? 'Update' : 'Add'}</button>
+      <button class="btn-archive" onclick="document.getElementById('recurring-form-area').innerHTML=''">Cancel</button>
+    </div>
+  `;
+}
+
+async function saveRecurring(id) {
+  const name = document.getElementById('rec-name').value.trim();
+  const amount = parseFloat(document.getElementById('rec-amount').value);
+  const day = parseInt(document.getElementById('rec-day').value) || null;
+  const cat = document.getElementById('rec-cat').value || null;
+  if (!name || !amount) return;
+
+  if (id) {
+    await fetch(`/api/finance/recurring/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, amount, day_of_month: day, category: cat })
+    });
+  } else {
+    await fetch('/api/finance/recurring', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, amount, day_of_month: day, category: cat })
+    });
+  }
+  financeState.recurring = await fetchJSON('/api/finance/recurring') || [];
+  renderFinanceContent(document.getElementById('main-content'));
+}
+
+function toggleRecurringMenu(e, id) {
+  e.stopPropagation();
+  // Close all other menus
+  document.querySelectorAll('.finance-menu-dropdown').forEach(el => {
+    if (el.id !== `recurring-menu-${id}`) el.style.display = 'none';
+  });
+  const menu = document.getElementById(`recurring-menu-${id}`);
+  menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
+}
+
+function editRecurring(id) {
+  const r = financeState.recurring.find(x => x.id === id);
+  if (r) showRecurringForm(r);
+}
+
+async function deleteRecurring(id) {
+  await fetch(`/api/finance/recurring/${id}`, { method: 'DELETE' });
+  financeState.recurring = await fetchJSON('/api/finance/recurring') || [];
+  renderFinanceContent(document.getElementById('main-content'));
+}
+
+function showExpenseForm() {
+  const area = document.getElementById('expense-form-area');
+  if (!area) return;
+  area.innerHTML = `
+    <div class="finance-inline-form" style="margin-bottom:1rem">
+      <input type="date" id="exp-date" class="modal-input" value="${new Date().toISOString().slice(0, 10)}" style="width:140px">
+      <input type="number" id="exp-amount" class="modal-input" placeholder="£" step="0.01" style="width:90px">
+      <input type="text" id="exp-desc" class="modal-input" placeholder="Description" style="flex:1">
+      <select id="exp-cat" class="modal-select" style="width:120px">
+        ${EXPENSE_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}
+      </select>
+      <button class="btn-move" onclick="addExpense()">Add</button>
+      <button class="btn-archive" onclick="document.getElementById('expense-form-area').innerHTML=''">Cancel</button>
+    </div>
+  `;
+}
+
+async function addExpense() {
+  const date = document.getElementById('exp-date').value;
+  const amount = parseFloat(document.getElementById('exp-amount').value);
+  const desc = document.getElementById('exp-desc').value.trim();
+  const cat = document.getElementById('exp-cat').value;
+  if (!amount) return;
+
+  await fetch('/api/finance/expenses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date, amount, description: desc, category: cat })
+  });
+  financeState.expenses = await fetchJSON('/api/finance/expenses') || [];
+  renderFinanceContent(document.getElementById('main-content'));
+}
+
+async function cycleExpenseStatus(id, newStatus) {
+  await fetch(`/api/finance/expenses/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: newStatus })
+  });
+  financeState.expenses = await fetchJSON('/api/finance/expenses') || [];
+  document.getElementById('finance-expenses-table').innerHTML = renderExpensesTable();
+}
+
+async function deleteExpense(id) {
+  await fetch(`/api/finance/expenses/${id}`, { method: 'DELETE' });
+  financeState.expenses = await fetchJSON('/api/finance/expenses') || [];
+  document.getElementById('finance-expenses-table').innerHTML = renderExpensesTable();
+}
+
+function filterExpenses(filter) {
+  financeState.expenseFilter = filter;
+  renderFinanceContent(document.getElementById('main-content'));
+}
+
+function exportExpenses() {
+  let items = financeState.expenses;
+  if (financeState.expenseFilter !== 'all') {
+    items = items.filter(e => e.status === financeState.expenseFilter);
+  }
+  const headers = ['Date', 'Amount', 'Description', 'Category', 'Status'];
+  const rows = items.map(e => [e.date, e.amount.toFixed(2), `"${(e.description || '').replace(/"/g, '""')}"`, e.category || '', e.status]);
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `work-expenses-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Close recurring menus on outside click
+document.addEventListener('click', () => {
+  document.querySelectorAll('.finance-menu-dropdown').forEach(el => el.style.display = 'none');
+});

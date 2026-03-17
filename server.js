@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -531,7 +531,14 @@ app.get('/api/log/stats', (req, res) => {
 app.get('/api/projects', (req, res) => {
   try {
     const projects = getProjects.all();
-    res.json(projects);
+    // Attach feature summary for overview
+    const enriched = projects.map(p => {
+      const features = getFeaturesByProject.all({ project_id: p.id }).map(f => ({
+        id: f.id, status: f.status, version_target: f.version_target
+      }));
+      return { ...p, features };
+    });
+    res.json(enriched);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -553,7 +560,7 @@ app.get('/api/projects/:id', (req, res) => {
 
 app.post('/api/projects', (req, res) => {
   try {
-    const { id, name, tagline, icon, status, platform, tech_stack, current_version, next_version, release_date, category, app_store_url, github_url, landing_url, trello_board_id } = req.body;
+    const { id, name, tagline, icon, status, platform, tech_stack, current_version, next_version, release_date, category, app_store_url, github_url, landing_url, trello_board_id, project_type } = req.body;
     if (!id || !name) return res.status(400).json({ error: 'id and name required' });
     insertProject.run({
       id, name,
@@ -569,7 +576,8 @@ app.post('/api/projects', (req, res) => {
       app_store_url: app_store_url || null,
       github_url: github_url || null,
       landing_url: landing_url || null,
-      trello_board_id: trello_board_id || null
+      trello_board_id: trello_board_id || null,
+      project_type: project_type || 'product'
     });
     const project = getProjectById.get({ id });
     res.json(project);
@@ -580,7 +588,7 @@ app.post('/api/projects', (req, res) => {
 
 app.put('/api/projects/:id', (req, res) => {
   try {
-    const fields = ['name','tagline','icon','status','platform','tech_stack','current_version','next_version','release_date','category','app_store_url','github_url','landing_url','trello_board_id'];
+    const fields = ['name','tagline','icon','status','platform','tech_stack','current_version','next_version','release_date','category','app_store_url','github_url','landing_url','trello_board_id','project_type'];
     const params = { id: req.params.id };
     for (const f of fields) params[f] = req.body[f] !== undefined ? req.body[f] : null;
     updateProject.run(params);
@@ -689,11 +697,14 @@ app.post('/api/projects/:id/features', (req, res) => {
   try {
     const { name, description, status, version_target, version_shipped, tags, priority, source, trello_card_id, prompt, testing } = req.body;
     if (!name) return res.status(400).json({ error: 'name required' });
+    // Auto-promote: if both prompt and testing are provided, move from idea to defined
+    let effectiveStatus = status || 'idea';
+    if (effectiveStatus === 'idea' && prompt && testing) effectiveStatus = 'defined';
     const result = insertFeature.run({
       project_id: req.params.id,
       name,
       description: description || null,
-      status: status || 'idea',
+      status: effectiveStatus,
       version_target: version_target || null,
       version_shipped: version_shipped || null,
       tags: tags || null,
@@ -713,8 +724,11 @@ app.post('/api/projects/:id/features', (req, res) => {
 app.put('/api/projects/:id/features/:featureId', (req, res) => {
   try {
     const fields = ['name','description','status','version_target','version_shipped','tags','priority','source','trello_card_id','prompt','testing'];
+    const existing = getFeatureById.get({ id: parseInt(req.params.featureId) });
     const params = { id: parseInt(req.params.featureId) };
-    for (const f of fields) params[f] = req.body[f] !== undefined ? req.body[f] : null;
+    for (const f of fields) params[f] = req.body[f] !== undefined ? req.body[f] : (existing ? existing[f] : null);
+    // Auto-promote: if both prompt and testing now exist and status is still idea, move to defined
+    if (params.status === 'idea' && params.prompt && params.testing) params.status = 'defined';
     updateFeature.run(params);
     const feature = getFeatureById.get({ id: parseInt(req.params.featureId) });
     res.json(feature);
@@ -1254,16 +1268,16 @@ app.get('/api/ideas', (req, res) => {
 
 app.post('/api/ideas', (req, res) => {
   try {
-    const { title, description, tags, source } = req.body;
+    const { title, description, tags, source, pain_point, how_it_works, why_it_works, feasibility, effort, revenue_model, competition, synergy } = req.body;
     if (!title) return res.status(400).json({ error: 'title required' });
-    const result = insertIdea.run({ title, description: description || null, tags: tags || null, source: source || null });
+    const result = insertIdea.run({ title, description: description || null, tags: tags || null, source: source || null, pain_point: pain_point || null, how_it_works: how_it_works || null, why_it_works: why_it_works || null, feasibility: feasibility || null, effort: effort || null, revenue_model: revenue_model || null, competition: competition || null, synergy: synergy || null });
     res.json(getIdeaById.get({ id: result.lastInsertRowid }));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/ideas/:id', (req, res) => {
   try {
-    const fields = ['title','description','tags','source','status','project_id'];
+    const fields = ['title','description','tags','source','status','project_id','pain_point','how_it_works','why_it_works','feasibility','effort','revenue_model','competition','synergy'];
     const params = { id: parseInt(req.params.id) };
     for (const f of fields) params[f] = req.body[f] !== undefined ? req.body[f] : null;
     updateIdea.run(params);
@@ -1294,10 +1308,328 @@ app.post('/api/ideas/:id/promote', (req, res) => {
       tech_stack: req.body.tech_stack || null,
       current_version: null, next_version: null, release_date: null,
       category: req.body.category || null,
-      app_store_url: null, github_url: null, landing_url: null, trello_board_id: null
+      app_store_url: null, github_url: null, landing_url: null, trello_board_id: null, project_type: 'product'
     });
     updateIdea.run({ id: parseInt(req.params.id), title: null, description: null, tags: null, source: null, status: 'promoted', project_id: projectId });
     res.json({ ok: true, project_id: projectId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- Finance API ---
+const financeDb = require('./db').financeDb;
+
+// Finance Settings
+app.get('/api/finance/settings', (req, res) => {
+  try {
+    let row = financeDb.prepare('SELECT * FROM finance_settings WHERE id = 1').get();
+    if (!row) {
+      financeDb.prepare('INSERT INTO finance_settings (id, monthly_income, savings_target, currency, updated_at) VALUES (1, 0, 0, ?, datetime(?))').run('£', 'now');
+      row = financeDb.prepare('SELECT * FROM finance_settings WHERE id = 1').get();
+    }
+    res.json(row);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/finance/settings', (req, res) => {
+  try {
+    const { monthly_income, savings_target } = req.body;
+    // Ensure row exists
+    let row = financeDb.prepare('SELECT * FROM finance_settings WHERE id = 1').get();
+    if (!row) {
+      financeDb.prepare('INSERT INTO finance_settings (id, monthly_income, savings_target, currency, updated_at) VALUES (1, 0, 0, ?, datetime(?))').run('£', 'now');
+    }
+    const { pay_day } = req.body;
+    financeDb.prepare('UPDATE finance_settings SET monthly_income = COALESCE(?, monthly_income), savings_target = COALESCE(?, savings_target), pay_day = COALESCE(?, pay_day), updated_at = datetime(?) WHERE id = 1')
+      .run(monthly_income !== undefined ? monthly_income : null, savings_target !== undefined ? savings_target : null, pay_day !== undefined ? pay_day : null, 'now');
+    res.json(financeDb.prepare('SELECT * FROM finance_settings WHERE id = 1').get());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Recurring Payments
+app.get('/api/finance/recurring', (req, res) => {
+  try {
+    const rows = financeDb.prepare('SELECT * FROM recurring_payments WHERE active = 1 ORDER BY day_of_month ASC').all();
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/finance/recurring', (req, res) => {
+  try {
+    const { name, amount, day_of_month, category } = req.body;
+    if (!name || amount === undefined) return res.status(400).json({ error: 'name and amount required' });
+    const result = financeDb.prepare('INSERT INTO recurring_payments (name, amount, day_of_month, category) VALUES (?, ?, ?, ?)').run(name, amount, day_of_month || null, category || null);
+    res.json(financeDb.prepare('SELECT * FROM recurring_payments WHERE id = ?').get(result.lastInsertRowid));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/finance/recurring/:id', (req, res) => {
+  try {
+    const { name, amount, day_of_month, category, active } = req.body;
+    financeDb.prepare('UPDATE recurring_payments SET name = COALESCE(?, name), amount = COALESCE(?, amount), day_of_month = COALESCE(?, day_of_month), category = COALESCE(?, category), active = COALESCE(?, active), updated_at = datetime(?) WHERE id = ?')
+      .run(name || null, amount !== undefined ? amount : null, day_of_month !== undefined ? day_of_month : null, category !== undefined ? category : null, active !== undefined ? active : null, 'now', parseInt(req.params.id));
+    res.json(financeDb.prepare('SELECT * FROM recurring_payments WHERE id = ?').get(parseInt(req.params.id)));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/finance/recurring/:id', (req, res) => {
+  try {
+    financeDb.prepare('DELETE FROM recurring_payments WHERE id = ?').run(parseInt(req.params.id));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Spending Log
+app.get('/api/finance/spending/today', (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = financeDb.prepare('SELECT * FROM spending_log WHERE date = ? ORDER BY created_at DESC').all(today);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/finance/spending', (req, res) => {
+  try {
+    const month = req.query.month; // YYYY-MM
+    if (month) {
+      const rows = financeDb.prepare("SELECT * FROM spending_log WHERE date LIKE ? ORDER BY date DESC, created_at DESC").all(month + '%');
+      res.json(rows);
+    } else {
+      const rows = financeDb.prepare('SELECT * FROM spending_log ORDER BY date DESC, created_at DESC LIMIT 200').all();
+      res.json(rows);
+    }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/finance/spending', (req, res) => {
+  try {
+    const { date, amount, description, category } = req.body;
+    if (!amount) return res.status(400).json({ error: 'amount required' });
+    const d = date || new Date().toISOString().slice(0, 10);
+    const result = financeDb.prepare('INSERT INTO spending_log (date, amount, description, category) VALUES (?, ?, ?, ?)').run(d, amount, description || null, category || null);
+    res.json(financeDb.prepare('SELECT * FROM spending_log WHERE id = ?').get(result.lastInsertRowid));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/finance/spending/:id', (req, res) => {
+  try {
+    financeDb.prepare('DELETE FROM spending_log WHERE id = ?').run(parseInt(req.params.id));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Work Expenses
+app.get('/api/finance/expenses', (req, res) => {
+  try {
+    const status = req.query.status;
+    let rows;
+    if (status) {
+      rows = financeDb.prepare('SELECT * FROM work_expenses WHERE status = ? ORDER BY date DESC').all(status);
+    } else {
+      rows = financeDb.prepare('SELECT * FROM work_expenses ORDER BY date DESC').all();
+    }
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/finance/expenses', (req, res) => {
+  try {
+    const { date, amount, description, category, receipt_note } = req.body;
+    if (!amount) return res.status(400).json({ error: 'amount required' });
+    const d = date || new Date().toISOString().slice(0, 10);
+    const result = financeDb.prepare('INSERT INTO work_expenses (date, amount, description, category, receipt_note) VALUES (?, ?, ?, ?, ?)').run(d, amount, description || null, category || null, receipt_note || null);
+    res.json(financeDb.prepare('SELECT * FROM work_expenses WHERE id = ?').get(result.lastInsertRowid));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/finance/expenses/:id', (req, res) => {
+  try {
+    const { date, amount, description, category, status, receipt_note } = req.body;
+    financeDb.prepare('UPDATE work_expenses SET date = COALESCE(?, date), amount = COALESCE(?, amount), description = COALESCE(?, description), category = COALESCE(?, category), status = COALESCE(?, status), receipt_note = COALESCE(?, receipt_note), updated_at = datetime(?) WHERE id = ?')
+      .run(date || null, amount !== undefined ? amount : null, description !== undefined ? description : null, category !== undefined ? category : null, status || null, receipt_note !== undefined ? receipt_note : null, 'now', parseInt(req.params.id));
+    res.json(financeDb.prepare('SELECT * FROM work_expenses WHERE id = ?').get(parseInt(req.params.id)));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/finance/expenses/:id', (req, res) => {
+  try {
+    financeDb.prepare('DELETE FROM work_expenses WHERE id = ?').run(parseInt(req.params.id));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/finance/expenses/export', (req, res) => {
+  try {
+    const { from, to } = req.query;
+    let rows;
+    if (from && to) {
+      rows = financeDb.prepare('SELECT * FROM work_expenses WHERE date >= ? AND date <= ? ORDER BY date ASC').all(from, to);
+    } else {
+      rows = financeDb.prepare('SELECT * FROM work_expenses ORDER BY date ASC').all();
+    }
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Budget Calculator
+app.get('/api/finance/budget', (req, res) => {
+  try {
+    let settings = financeDb.prepare('SELECT * FROM finance_settings WHERE id = 1').get();
+    if (!settings) {
+      financeDb.prepare('INSERT INTO finance_settings (id, monthly_income, savings_target, currency, updated_at) VALUES (1, 0, 0, ?, datetime(?))').run('£', 'now');
+      settings = financeDb.prepare('SELECT * FROM finance_settings WHERE id = 1').get();
+    }
+
+    const now = new Date();
+    const payDay = settings.pay_day || 25;
+    const currentDay = now.getDate();
+
+    // Calculate pay cycle: from last payday to next payday
+    let cycleStart, cycleEnd;
+    if (currentDay >= payDay) {
+      // We're past this month's payday — cycle is this month's payday to next month's
+      cycleStart = new Date(now.getFullYear(), now.getMonth(), payDay);
+      cycleEnd = new Date(now.getFullYear(), now.getMonth() + 1, payDay);
+    } else {
+      // Before this month's payday — cycle is last month's payday to this month's
+      cycleStart = new Date(now.getFullYear(), now.getMonth() - 1, payDay);
+      cycleEnd = new Date(now.getFullYear(), now.getMonth(), payDay);
+    }
+    const cycleStartStr = cycleStart.toISOString().slice(0, 10);
+    const cycleEndStr = cycleEnd.toISOString().slice(0, 10);
+    const totalDaysInCycle = Math.round((cycleEnd - cycleStart) / 86400000);
+    const daysSoFar = Math.round((now - cycleStart) / 86400000);
+    const daysRemaining = Math.max(1, totalDaysInCycle - daysSoFar);
+
+    // Total fixed costs (active recurring)
+    const recurring = financeDb.prepare('SELECT * FROM recurring_payments WHERE active = 1').all();
+    const totalFixed = recurring.reduce((sum, r) => sum + r.amount, 0);
+
+    // Total spent this pay cycle
+    const spentRow = financeDb.prepare("SELECT COALESCE(SUM(amount), 0) as total FROM spending_log WHERE date >= ? AND date < ?").get(cycleStartStr, cycleEndStr);
+    const totalSpent = spentRow.total;
+
+    const remaining = settings.monthly_income - totalFixed - settings.savings_target - totalSpent;
+    const dailyAllowance = remaining / daysRemaining;
+    const calculatedAt = now.toISOString();
+
+    // Save snapshot
+    const today = now.toISOString().slice(0, 10);
+    financeDb.prepare('INSERT INTO budget_snapshots (date, daily_allowance, total_spent, total_fixed, remaining, days_remaining, calculated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(today, dailyAllowance, totalSpent, totalFixed, remaining, daysRemaining, calculatedAt);
+
+    res.json({
+      daily_allowance: dailyAllowance,
+      total_spent: totalSpent,
+      total_fixed: totalFixed,
+      remaining,
+      days_remaining: daysRemaining,
+      days_in_cycle: totalDaysInCycle,
+      cycle_start: cycleStartStr,
+      cycle_end: cycleEndStr,
+      pay_day: payDay,
+      savings_target: settings.savings_target,
+      monthly_income: settings.monthly_income,
+      calculated_at: calculatedAt
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/finance/budget/latest', (req, res) => {
+  try {
+    const row = financeDb.prepare('SELECT * FROM budget_snapshots ORDER BY calculated_at DESC LIMIT 1').get();
+    if (!row) return res.json(null);
+    // Also get settings for full context
+    const settings = financeDb.prepare('SELECT * FROM finance_settings WHERE id = 1').get();
+    res.json({
+      daily_allowance: row.daily_allowance,
+      total_spent: row.total_spent,
+      total_fixed: row.total_fixed,
+      remaining: row.remaining,
+      days_remaining: row.days_remaining,
+      savings_target: settings?.savings_target || 0,
+      monthly_income: settings?.monthly_income || 0,
+      calculated_at: row.calculated_at
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- Chat SSE ---
+const chatSSEClients = new Set();
+
+app.get('/api/chat/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+
+  res.write(`event: connected\ndata: {"status":"connected"}\n\n`);
+  chatSSEClients.add(res);
+
+  // Heartbeat every 30s to keep connection alive
+  const heartbeat = setInterval(() => {
+    res.write(`event: heartbeat\ndata: {}\n\n`);
+  }, 30000);
+
+  req.on('close', () => {
+    chatSSEClients.delete(res);
+    clearInterval(heartbeat);
+  });
+});
+
+function broadcastChatMessage(msg) {
+  const data = JSON.stringify(msg);
+  for (const client of chatSSEClients) {
+    try { client.write(`event: message\ndata: ${data}\n\n`); } catch(e) {}
+  }
+}
+
+// --- Chat Messages ---
+app.get('/api/chat/messages', (req, res) => {
+  try {
+    const after = parseInt(req.query.after);
+    if (after) {
+      const messages = getChatMessagesAfter.all({ after });
+      return res.json(messages);
+    }
+    const limit = parseInt(req.query.limit) || 50;
+    const messages = getChatMessages.all({ limit });
+    res.json(messages.reverse());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/chat/messages/pending', (req, res) => {
+  try {
+    const row = getChatPending.get();
+    res.json({ pending: row.count > 0, count: row.count });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/chat/messages', (req, res) => {
+  try {
+    const { content, role } = req.body;
+    if (!content) return res.status(400).json({ error: 'content required' });
+    const status = role === 'assistant' ? null : null;
+    const result = insertChatMessage.run({ content, role: role || 'user', status });
+    // If assistant message, mark pending user messages as answered
+    if (role === 'assistant') {
+      markChatAnswered.run();
+    }
+    const msg = { id: result.lastInsertRowid, content, role: role || 'user', status, created_at: new Date().toISOString() };
+    broadcastChatMessage(msg);
+    res.json(msg);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Send a message (from iOS app) — saves with pending status and triggers Jarvis
+app.post('/api/chat/send', (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: 'content required' });
+    const result = insertChatMessage.run({ content, role: 'user', status: 'pending' });
+    const msg = { id: result.lastInsertRowid, content, role: 'user', created_at: new Date().toISOString(), status: 'pending' };
+    broadcastChatMessage(msg);
+    res.json(msg);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

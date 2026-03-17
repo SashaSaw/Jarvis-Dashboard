@@ -371,13 +371,16 @@ const getLogTopActions = db.prepare(`
 // --- Projects ---
 
 const insertProject = db.prepare(`
-  INSERT INTO projects (id, name, tagline, icon, status, platform, tech_stack, current_version, next_version, release_date, category, app_store_url, github_url, landing_url, trello_board_id)
-  VALUES (@id, @name, @tagline, @icon, @status, @platform, @tech_stack, @current_version, @next_version, @release_date, @category, @app_store_url, @github_url, @landing_url, @trello_board_id)
+  INSERT INTO projects (id, name, tagline, icon, status, platform, tech_stack, current_version, next_version, release_date, category, app_store_url, github_url, landing_url, trello_board_id, project_type)
+  VALUES (@id, @name, @tagline, @icon, @status, @platform, @tech_stack, @current_version, @next_version, @release_date, @category, @app_store_url, @github_url, @landing_url, @trello_board_id, @project_type)
 `);
 
 const getProjects = db.prepare(`SELECT * FROM projects ORDER BY name ASC`);
 
 const getProjectById = db.prepare(`SELECT * FROM projects WHERE id = @id`);
+
+// Add project_type column if missing
+try { db.exec(`ALTER TABLE projects ADD COLUMN project_type TEXT DEFAULT 'product'`); } catch(e) {}
 
 const updateProject = db.prepare(`
   UPDATE projects SET
@@ -395,6 +398,7 @@ const updateProject = db.prepare(`
     github_url = COALESCE(@github_url, github_url),
     landing_url = COALESCE(@landing_url, landing_url),
     trello_board_id = COALESCE(@trello_board_id, trello_board_id),
+    project_type = COALESCE(@project_type, project_type),
     updated_at = datetime('now')
   WHERE id = @id
 `);
@@ -590,7 +594,8 @@ db.exec(`
 `);
 
 const insertIdea = db.prepare(`
-  INSERT INTO ideas (title, description, tags, source) VALUES (@title, @description, @tags, @source)
+  INSERT INTO ideas (title, description, tags, source, pain_point, how_it_works, why_it_works, feasibility, effort, revenue_model, competition, synergy)
+  VALUES (@title, @description, @tags, @source, @pain_point, @how_it_works, @why_it_works, @feasibility, @effort, @revenue_model, @competition, @synergy)
 `);
 const getIdeas = db.prepare(`SELECT * FROM ideas ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'archived' THEN 1 END, created_at DESC`);
 const getActiveIdeas = db.prepare(`SELECT * FROM ideas WHERE status = 'active' ORDER BY created_at DESC`);
@@ -604,6 +609,14 @@ const updateIdea = db.prepare(`
     source = COALESCE(@source, source),
     status = COALESCE(@status, status),
     project_id = COALESCE(@project_id, project_id),
+    pain_point = COALESCE(@pain_point, pain_point),
+    how_it_works = COALESCE(@how_it_works, how_it_works),
+    why_it_works = COALESCE(@why_it_works, why_it_works),
+    feasibility = COALESCE(@feasibility, feasibility),
+    effort = COALESCE(@effort, effort),
+    revenue_model = COALESCE(@revenue_model, revenue_model),
+    competition = COALESCE(@competition, competition),
+    synergy = COALESCE(@synergy, synergy),
     archived_at = CASE WHEN @status = 'archived' THEN datetime('now') ELSE archived_at END,
     updated_at = datetime('now')
   WHERE id = @id
@@ -617,3 +630,102 @@ module.exports.getArchivedIdeas = getArchivedIdeas;
 module.exports.getIdeaById = getIdeaById;
 module.exports.updateIdea = updateIdea;
 module.exports.deleteIdeaPermanent = deleteIdeaPermanent;
+
+// Migration: add rich fields to ideas
+try { db.exec(`ALTER TABLE ideas ADD COLUMN pain_point TEXT`); } catch(e) {}
+try { db.exec(`ALTER TABLE ideas ADD COLUMN how_it_works TEXT`); } catch(e) {}
+try { db.exec(`ALTER TABLE ideas ADD COLUMN why_it_works TEXT`); } catch(e) {}
+try { db.exec(`ALTER TABLE ideas ADD COLUMN feasibility TEXT`); } catch(e) {}
+try { db.exec(`ALTER TABLE ideas ADD COLUMN effort TEXT`); } catch(e) {}
+try { db.exec(`ALTER TABLE ideas ADD COLUMN revenue_model TEXT`); } catch(e) {}
+try { db.exec(`ALTER TABLE ideas ADD COLUMN competition TEXT`); } catch(e) {}
+try { db.exec(`ALTER TABLE ideas ADD COLUMN synergy TEXT`); } catch(e) {}
+
+// --- Finance ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS finance_settings (
+    id INTEGER PRIMARY KEY,
+    monthly_income REAL DEFAULT 0,
+    savings_target REAL DEFAULT 0,
+    currency TEXT DEFAULT '£',
+    pay_day INTEGER DEFAULT 25,
+    updated_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS recurring_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    amount REAL NOT NULL,
+    day_of_month INTEGER,
+    category TEXT,
+    active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS spending_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    amount REAL NOT NULL,
+    description TEXT,
+    category TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_spending_date ON spending_log(date);
+
+  CREATE TABLE IF NOT EXISTS work_expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    amount REAL NOT NULL,
+    description TEXT,
+    category TEXT,
+    status TEXT DEFAULT 'pending',
+    receipt_note TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_expenses_status ON work_expenses(status);
+
+  CREATE TABLE IF NOT EXISTS budget_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    daily_allowance REAL,
+    total_spent REAL,
+    total_fixed REAL,
+    remaining REAL,
+    days_remaining INTEGER,
+    calculated_at TEXT DEFAULT (datetime('now'))
+  );
+`);
+
+// Migrations
+try { db.exec(`ALTER TABLE finance_settings ADD COLUMN pay_day INTEGER DEFAULT 25`); } catch(e) {}
+
+module.exports.financeDb = db;
+
+// Chat messages table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    status TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+`);
+
+// Migration
+try { db.exec(`ALTER TABLE chat_messages ADD COLUMN status TEXT`); } catch(e) {}
+
+const getChatMessages = db.prepare('SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT @limit');
+const getChatMessagesAfter = db.prepare('SELECT * FROM chat_messages WHERE id > @after ORDER BY created_at ASC');
+const insertChatMessage = db.prepare("INSERT INTO chat_messages (content, role, status, created_at) VALUES (@content, @role, @status, datetime('now'))");
+const getChatPending = db.prepare("SELECT COUNT(*) as count FROM chat_messages WHERE status = 'pending'");
+const markChatAnswered = db.prepare("UPDATE chat_messages SET status = 'answered' WHERE status = 'pending'");
+
+module.exports.getChatMessages = getChatMessages;
+module.exports.getChatMessagesAfter = getChatMessagesAfter;
+module.exports.insertChatMessage = insertChatMessage;
+module.exports.getChatPending = getChatPending;
+module.exports.markChatAnswered = markChatAnswered;
