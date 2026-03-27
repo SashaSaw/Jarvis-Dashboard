@@ -9,7 +9,7 @@ let currentBoardLists = null;
 let newCardListId = null;
 let boardLabelsCache = {};
 let editingDesc = false;
-let currentView = 'overview';
+let currentView = 'home';
 let expandedTaskId = null;
 let inboxPriority = 'normal';
 let editingTaskId = null;
@@ -154,7 +154,6 @@ function closeSidebar() {
 // Page name mapping for mobile top bar
 const VIEW_NAMES = {
   home: 'Home',
-  overview: 'Overview',
   schedule: 'Schedule',
   inbox: 'Inbox',
   kanban: 'Kanban',
@@ -204,9 +203,10 @@ function route() {
     }
   }
 
+  if (currentView === 'overview') { navigate('home'); return; }
+
   switch (currentView) {
     case 'home': renderHome(main); break;
-    case 'overview': renderOverview(main); break;
     case 'schedule': renderSchedule(main); break;
     case 'inbox': renderInbox(main); break;
     case 'kanban': renderKanban(main); break;
@@ -287,13 +287,13 @@ function staleBadgeHtml(daysStr, staleLevel) {
 }
 
 async function renderHome(container) {
-  // Show skeleton immediately
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
   container.innerHTML = `
     <div class="view-container home-view">
+      <!-- 1. Header: greeting + stats pills -->
       <div class="home-header">
         <div class="home-greeting">
           <span class="home-greeting-text">${getGreeting()}, Sasha</span>
@@ -306,8 +306,28 @@ async function renderHome(container) {
         </div>
       </div>
 
+      <!-- 2. Stats Row -->
+      <div class="stats-row home-stats-row">
+        <div class="stat-card green">
+          <div class="stat-value" id="stat-tasks">-</div>
+          <div class="stat-label">Tasks Completed</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-value" id="stat-tool-uses">-</div>
+          <div class="stat-label">Tool Uses Today</div>
+        </div>
+        <div class="stat-card accent">
+          <div class="stat-value" id="stat-sessions">-</div>
+          <div class="stat-label">Active Sessions</div>
+        </div>
+        <div class="stat-card orange">
+          <div class="stat-value" id="stat-events">-</div>
+          <div class="stat-label">Events Today</div>
+        </div>
+      </div>
+
       <div class="home-body">
-        <!-- Goals placeholder -->
+        <!-- 3. Goals placeholder -->
         <section class="home-section home-goals-section">
           <div class="home-section-header">
             <span class="home-section-title">🎯 Today's Goals</span>
@@ -318,7 +338,7 @@ async function renderHome(container) {
           </div>
         </section>
 
-        <!-- Alerts -->
+        <!-- 4. Alerts -->
         <section class="home-section" id="home-alerts-section">
           <div class="home-section-header">
             <span class="home-section-title">🔔 Alerts</span>
@@ -327,24 +347,37 @@ async function renderHome(container) {
           <div id="home-alerts-list" class="home-loading">Loading…</div>
         </section>
 
-        <!-- Schedule -->
-        <section class="home-section" id="home-schedule-section">
-          <div class="home-section-header">
-            <span class="home-section-title">🗓 Today's Schedule</span>
-          </div>
-          <div id="home-schedule-list" class="home-loading">Loading…</div>
-        </section>
-
+        <!-- 5. Two-col: Agent Status (rich cards) + Active Tasks -->
         <div class="home-two-col">
-          <!-- Agent Status -->
           <section class="home-section" id="home-agents-section">
             <div class="home-section-header">
               <span class="home-section-title">🤖 Agent Status</span>
             </div>
-            <div id="home-agents-list" class="home-loading">Loading…</div>
+            <div class="agent-cards-vertical">
+              <div class="card agent-status-card">
+                <div class="card-header">
+                  <span class="card-title">🐶 Jarvis</span>
+                  <span class="card-badge" id="jarvis-status-badge" style="background:var(--green-dim);color:var(--green)">Online</span>
+                </div>
+                <div id="jarvis-status-content"><div class="empty-state">Waiting for status...</div></div>
+              </div>
+              <div class="card agent-status-card">
+                <div class="card-header">
+                  <span class="card-title">⚡ Klaus</span>
+                  <span class="card-badge" id="klaus-status-badge" style="background:var(--red-dim);color:var(--red)">Offline</span>
+                </div>
+                <div id="klaus-status-content"><div class="empty-state">No activity yet</div></div>
+              </div>
+              <div class="card agent-status-card">
+                <div class="card-header">
+                  <span class="card-title">📧 Emily</span>
+                  <span class="card-badge" id="emily-status-badge" style="background:var(--red-dim);color:var(--red)">Offline</span>
+                </div>
+                <div id="emily-status-content"><div class="empty-state">No activity yet</div></div>
+              </div>
+            </div>
           </section>
 
-          <!-- Tasks -->
           <section class="home-section" id="home-tasks-section">
             <div class="home-section-header">
               <span class="home-section-title">✅ Active Tasks</span>
@@ -353,7 +386,15 @@ async function renderHome(container) {
           </section>
         </div>
 
-        <!-- Projects Overview -->
+        <!-- 6. Today's Schedule -->
+        <section class="home-section" id="home-schedule-section">
+          <div class="home-section-header">
+            <span class="home-section-title">🗓 Today's Schedule</span>
+          </div>
+          <div id="home-schedule-list" class="home-loading">Loading…</div>
+        </section>
+
+        <!-- 7. Projects Grid -->
         <section class="home-section" id="home-projects-section">
           <div class="home-section-header">
             <span class="home-section-title">📁 Projects</span>
@@ -361,7 +402,38 @@ async function renderHome(container) {
           <div id="home-projects-grid" class="home-loading">Loading…</div>
         </section>
 
-        <!-- Quick Actions -->
+        <!-- 8. Two-col: Activity Feed + Heartbeat & Deliverables -->
+        <div class="home-two-col">
+          <section class="home-section">
+            <div class="home-section-header">
+              <span class="home-section-title">📡 Activity Feed</span>
+              <span class="home-section-badge" id="feed-count">0 events</span>
+            </div>
+            <ul class="feed-list" id="activity-feed">
+              <li class="empty-state">No agent activity yet.</li>
+            </ul>
+          </section>
+
+          <div class="home-right-col">
+            <section class="home-section">
+              <div class="home-section-header">
+                <span class="home-section-title">💓 Heartbeat</span>
+                <span class="card-badge" id="heartbeat-badge" style="background:var(--text-muted);color:var(--bg-card)">...</span>
+              </div>
+              <div id="heartbeat-content"><div class="home-loading">Loading…</div></div>
+            </section>
+
+            <section class="home-section">
+              <div class="home-section-header">
+                <span class="home-section-title">🚀 Scheduled Deliverables</span>
+                <span class="home-section-badge" style="background:rgba(167,139,250,0.15);color:#a78bfa">automated</span>
+              </div>
+              <div id="deliverables-content"><div class="home-loading">Loading…</div></div>
+            </section>
+          </div>
+        </div>
+
+        <!-- 9. Quick Actions -->
         <section class="home-section home-quick-actions">
           <div class="home-section-header">
             <span class="home-section-title">⚡ Quick Actions</span>
@@ -383,9 +455,9 @@ async function renderHome(container) {
               <span class="qa-icon">🗓</span>
               <span>Schedule</span>
             </button>
-            <button class="quick-action-btn" onclick="navigate('overview')">
-              <span class="qa-icon">📊</span>
-              <span>Overview</span>
+            <button class="quick-action-btn" onclick="navigate('ideas')">
+              <span class="qa-icon">💡</span>
+              <span>Ideas</span>
             </button>
             <button class="quick-action-btn" onclick="navigate('log')">
               <span class="qa-icon">📜</span>
@@ -397,40 +469,49 @@ async function renderHome(container) {
     </div>
   `;
 
-  // Fetch and render data
   refreshHomeData();
 }
 
 async function refreshHomeData() {
   if (currentView !== 'home') return;
-  const data = await fetchJSON('/api/home');
-  if (!data || currentView !== 'home') return;
 
-  // Header stats
-  const alertEl = document.getElementById('home-stat-alerts');
-  const projEl = document.getElementById('home-stat-projects');
-  const taskEl = document.getElementById('home-stat-tasks');
-  if (alertEl) {
-    alertEl.textContent = `${data.stats.alerts_count} alert${data.stats.alerts_count !== 1 ? 's' : ''}`;
-    alertEl.className = 'home-stat-pill' + (data.stats.alerts_count > 0 ? ' red' : '');
+  const [homeData, stats, events, jarvis, klaus, emily, deliverables, heartbeat] = await Promise.all([
+    fetchJSON('/api/home'),
+    fetchJSON('/api/events/stats'),
+    fetchJSON('/api/events?limit=50'),
+    fetchJSON('/api/agent/jarvis/status'),
+    fetchJSON('/api/agent/klaus/status'),
+    fetchJSON('/api/agent/emily/status'),
+    fetchJSON('/api/scheduled-deliverables'),
+    fetchJSON('/api/heartbeat-status')
+  ]);
+
+  if (currentView !== 'home') return;
+
+  if (homeData) {
+    const alertEl = document.getElementById('home-stat-alerts');
+    const projEl = document.getElementById('home-stat-projects');
+    const taskEl = document.getElementById('home-stat-tasks');
+    if (alertEl) {
+      alertEl.textContent = `${homeData.stats.alerts_count} alert${homeData.stats.alerts_count !== 1 ? 's' : ''}`;
+      alertEl.className = 'home-stat-pill' + (homeData.stats.alerts_count > 0 ? ' red' : '');
+    }
+    if (projEl) projEl.textContent = `${homeData.stats.projects_active} projects`;
+    if (taskEl) taskEl.textContent = `${homeData.stats.tasks_in_progress + homeData.stats.tasks_todo} tasks`;
+
+    renderHomeAlerts(homeData.alerts);
+    renderHomeSchedule(homeData.schedule);
+    renderHomeTasks(homeData.tasks);
+    renderHomeProjects(homeData.projects);
   }
-  if (projEl) projEl.textContent = `${data.stats.projects_active} projects`;
-  if (taskEl) taskEl.textContent = `${data.stats.tasks_in_progress + data.stats.tasks_todo} tasks`;
 
-  // Alerts
-  renderHomeAlerts(data.alerts);
-
-  // Schedule
-  renderHomeSchedule(data.schedule);
-
-  // Agents
-  renderHomeAgents(data.agents);
-
-  // Tasks
-  renderHomeTasks(data.tasks);
-
-  // Projects
-  renderHomeProjects(data.projects);
+  renderStats(stats);
+  renderFeed(events);
+  renderAgentStatus(jarvis, 'jarvis-status-content', 'jarvis-status-badge', 'Jarvis');
+  renderAgentStatus(klaus, 'klaus-status-content', 'klaus-status-badge', 'Klaus');
+  renderAgentStatus(emily, 'emily-status-content', 'emily-status-badge', 'Emily');
+  renderDeliverables(deliverables);
+  renderHeartbeat(heartbeat);
 }
 
 function renderHomeAlerts(alerts) {
@@ -494,35 +575,6 @@ function renderHomeSchedule(schedule) {
   `).join('')}</div>`;
 }
 
-function renderHomeAgents(agents) {
-  const el = document.getElementById('home-agents-list');
-  if (!el) return;
-
-  const AGENT_ICONS = { jarvis: '🐶', klaus: '⚡', emily: '📧' };
-
-  el.innerHTML = agents.map(a => {
-    const isOnline = a.status && a.status !== 'offline' && !a.error;
-    const updatedAgo = a.updated_at ? (Date.now() - new Date(a.updated_at).getTime()) / 60000 : 999;
-    const stale = updatedAgo > 30;
-    const statusText = a.error ? 'Offline' : (a.status_text || a.status || 'Unknown');
-    const dotCls = a.error ? 'offline' : (a.status === 'busy' ? 'busy' : (stale ? 'idle' : 'online'));
-    return `
-      <div class="home-agent-card" onclick="navigate('agent/${a.name}')">
-        <div class="home-agent-icon">${AGENT_ICONS[a.name] || '🤖'}</div>
-        <div class="home-agent-info">
-          <div class="home-agent-name">
-            <span class="agent-dot ${dotCls}"></span>
-            ${a.name.charAt(0).toUpperCase() + a.name.slice(1)}
-          </div>
-          <div class="home-agent-status">${escapeHtml(statusText)}</div>
-          ${a.task ? `<div class="home-agent-task">${escapeHtml(a.task)}</div>` : ''}
-          ${a.model ? `<div class="home-agent-model">${escapeHtml(a.model)}</div>` : ''}
-        </div>
-      </div>
-    `;
-  }).join('');
-}
-
 function renderHomeTasks(tasks) {
   const el = document.getElementById('home-tasks-list');
   if (!el) return;
@@ -560,141 +612,6 @@ function renderHomeProjects(projects) {
       </div>
     </div>
   `).join('');
-}
-
-async function renderOverview(container) {
-  container.innerHTML = `
-    <div class="view-container">
-      <div class="overview-grid">
-        <div class="stats-row">
-          <div class="stat-card green">
-            <div class="stat-value" id="stat-tasks">-</div>
-            <div class="stat-label">Tasks Completed</div>
-          </div>
-          <div class="stat-card blue">
-            <div class="stat-value" id="stat-tool-uses">-</div>
-            <div class="stat-label">Tool Uses Today</div>
-          </div>
-          <div class="stat-card accent">
-            <div class="stat-value" id="stat-sessions">-</div>
-            <div class="stat-label">Active Sessions</div>
-          </div>
-          <div class="stat-card orange">
-            <div class="stat-value" id="stat-events">-</div>
-            <div class="stat-label">Events Today</div>
-          </div>
-        </div>
-
-        <div class="card agent-status-card">
-          <div class="card-header">
-            <span class="card-title">🐶 Jarvis</span>
-            <span class="card-badge" id="jarvis-status-badge" style="background:var(--green-dim);color:var(--green)">Online</span>
-          </div>
-          <div id="jarvis-status-content">
-            <div class="empty-state">Waiting for status...</div>
-          </div>
-        </div>
-
-        <div class="card agent-status-card">
-          <div class="card-header">
-            <span class="card-title">⚡ Klaus</span>
-            <span class="card-badge" id="klaus-status-badge" style="background:var(--red-dim);color:var(--red)">Offline</span>
-          </div>
-          <div id="klaus-status-content">
-            <div class="empty-state">No activity yet</div>
-          </div>
-        </div>
-
-        <div class="card agent-status-card">
-          <div class="card-header">
-            <span class="card-title">📧 Emily</span>
-            <span class="card-badge" id="emily-status-badge" style="background:var(--red-dim);color:var(--red)">Offline</span>
-          </div>
-          <div id="emily-status-content">
-            <div class="empty-state">No activity yet</div>
-          </div>
-        </div>
-
-        <div class="card" id="sessions-card">
-          <div class="card-header">
-            <span class="card-title">⚡ Active Agent Sessions</span>
-          </div>
-          <div id="sessions-content">
-            <div class="loading"><div class="spinner"></div> Loading...</div>
-          </div>
-        </div>
-
-        <div class="card" id="calendar-card">
-          <div class="card-header">
-            <span class="card-title">📅 Upcoming Schedule</span>
-            <span class="card-badge" style="background:var(--blue-dim);color:var(--blue)">7 days</span>
-          </div>
-          <div id="calendar-content">
-            <div class="loading"><div class="spinner"></div> Loading...</div>
-          </div>
-        </div>
-
-        <div class="card" id="heartbeat-card">
-          <div class="card-header">
-            <span class="card-title">💓 Heartbeat</span>
-            <span class="card-badge" id="heartbeat-badge" style="background:var(--text-muted);color:var(--bg-card)">...</span>
-          </div>
-          <div id="heartbeat-content">
-            <div class="loading"><div class="spinner"></div> Loading...</div>
-          </div>
-        </div>
-
-        <div class="card deliverables-card" id="deliverables-card">
-          <div class="card-header">
-            <span class="card-title">🚀 Scheduled Deliverables</span>
-            <span class="card-badge" style="background:rgba(167,139,250,0.15);color:#a78bfa">automated</span>
-          </div>
-          <div id="deliverables-content">
-            <div class="loading"><div class="spinner"></div> Loading...</div>
-          </div>
-        </div>
-
-        <div class="card activity-feed-card">
-          <div class="card-header">
-            <span class="card-title">📡 Agent Activity Feed</span>
-            <span class="card-badge" style="background:var(--green-dim);color:var(--green)" id="feed-count">0 events</span>
-          </div>
-          <ul class="feed-list" id="activity-feed">
-            <li class="empty-state">No agent activity yet.</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  `;
-  refreshOverviewData();
-}
-
-async function refreshOverviewData() {
-  if (currentView !== 'overview') return;
-
-  const [stats, events, sessions, calendar, jarvis, klaus, emily, deliverables, heartbeat] = await Promise.all([
-    fetchJSON('/api/events/stats'),
-    fetchJSON('/api/events?limit=50'),
-    fetchJSON('/api/sessions/active'),
-    fetchJSON('/api/calendar?days=2'),
-    fetchJSON('/api/agent/jarvis/status'),
-    fetchJSON('/api/agent/klaus/status'),
-    fetchJSON('/api/agent/emily/status'),
-    fetchJSON('/api/scheduled-deliverables'),
-    fetchJSON('/api/heartbeat-status')
-  ]);
-
-  if (currentView !== 'overview') return;
-
-  renderStats(stats);
-  renderFeed(events);
-  renderSessions(sessions);
-  renderAgentStatus(jarvis, 'jarvis-status-content', 'jarvis-status-badge', 'Jarvis');
-  renderAgentStatus(klaus, 'klaus-status-content', 'klaus-status-badge', 'Klaus');
-  renderAgentStatus(emily, 'emily-status-content', 'emily-status-badge', 'Emily');
-  renderCalendar(calendar);
-  renderDeliverables(deliverables);
-  renderHeartbeat(heartbeat);
 }
 
 function renderStats(stats) {
@@ -5085,8 +5002,8 @@ function updateTimestamp() {
 
 async function periodicRefresh() {
   updateTimestamp();
-  if (currentView === 'overview') {
-    refreshOverviewData();
+  if (currentView === 'home') {
+    refreshHomeData();
   } else if (currentView === 'schedule') {
     refreshScheduleData();
   }
