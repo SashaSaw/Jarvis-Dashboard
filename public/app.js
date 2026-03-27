@@ -122,7 +122,7 @@ function categoryTagHtml(category) {
 // ===== ROUTING =====
 
 function getView() {
-  const hash = location.hash.replace('#', '') || 'overview';
+  const hash = location.hash.replace('#', '') || 'home';
   return hash;
 }
 
@@ -153,12 +153,16 @@ function closeSidebar() {
 
 // Page name mapping for mobile top bar
 const VIEW_NAMES = {
+  home: 'Home',
   overview: 'Overview',
   schedule: 'Schedule',
   inbox: 'Inbox',
   kanban: 'Kanban',
   projects: 'Projects',
+  ideas: 'Ideas',
+  workspace: 'Workspace',
   docs: 'Docs',
+  finance: 'Finance',
   log: 'Activity Log'
 };
 
@@ -201,16 +205,18 @@ function route() {
   }
 
   switch (currentView) {
+    case 'home': renderHome(main); break;
     case 'overview': renderOverview(main); break;
     case 'schedule': renderSchedule(main); break;
     case 'inbox': renderInbox(main); break;
     case 'kanban': renderKanban(main); break;
     case 'projects': renderProjects(main); break;
     case 'ideas': renderIdeas(main); break;
+    case 'workspace': renderWorkspace(main); break;
     case 'docs': renderDocs(main); break;
     case 'finance': renderFinance(main); break;
     case 'log': renderLog(main); break;
-    default: renderOverview(main); break;
+    default: renderHome(main); break;
   }
 }
 
@@ -254,6 +260,307 @@ function updateSidebarAgent(name, status) {
 }
 
 // ===== VIEW: OVERVIEW (Original Dashboard) =====
+
+// ===== HOME PAGE =====
+
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function relativeActivityTime(dateStr) {
+  if (!dateStr) return 'Never';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const days = Math.floor(diff / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return `${days}d ago`;
+}
+
+function staleBadgeHtml(daysStr, staleLevel) {
+  if (!staleLevel) return '';
+  const days = daysStr;
+  const cls = staleLevel === 'red' ? 'stale-red' : 'stale-amber';
+  return `<span class="stale-badge ${cls}" title="No activity for ${days} day${days !== 1 ? 's' : ''}">⚠ ${days}d</span>`;
+}
+
+async function renderHome(container) {
+  // Show skeleton immediately
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+  container.innerHTML = `
+    <div class="view-container home-view">
+      <div class="home-header">
+        <div class="home-greeting">
+          <span class="home-greeting-text">${getGreeting()}, Sasha</span>
+          <span class="home-datetime">${dateStr} &mdash; ${timeStr}</span>
+        </div>
+        <div class="home-header-stats" id="home-header-stats">
+          <span class="home-stat-pill" id="home-stat-alerts">… alerts</span>
+          <span class="home-stat-pill blue" id="home-stat-projects">… projects</span>
+          <span class="home-stat-pill green" id="home-stat-tasks">… tasks</span>
+        </div>
+      </div>
+
+      <div class="home-body">
+        <!-- Goals placeholder -->
+        <section class="home-section home-goals-section">
+          <div class="home-section-header">
+            <span class="home-section-title">🎯 Today's Goals</span>
+          </div>
+          <div class="home-goals-placeholder">
+            <span class="placeholder-text">No goals set for today.</span>
+            <button class="btn-ghost" disabled title="Coming in Sprint 2">+ Set Goals</button>
+          </div>
+        </section>
+
+        <!-- Alerts -->
+        <section class="home-section" id="home-alerts-section">
+          <div class="home-section-header">
+            <span class="home-section-title">🔔 Alerts</span>
+            <span class="home-section-badge" id="home-alerts-count">…</span>
+          </div>
+          <div id="home-alerts-list" class="home-loading">Loading…</div>
+        </section>
+
+        <!-- Schedule -->
+        <section class="home-section" id="home-schedule-section">
+          <div class="home-section-header">
+            <span class="home-section-title">🗓 Today's Schedule</span>
+          </div>
+          <div id="home-schedule-list" class="home-loading">Loading…</div>
+        </section>
+
+        <div class="home-two-col">
+          <!-- Agent Status -->
+          <section class="home-section" id="home-agents-section">
+            <div class="home-section-header">
+              <span class="home-section-title">🤖 Agent Status</span>
+            </div>
+            <div id="home-agents-list" class="home-loading">Loading…</div>
+          </section>
+
+          <!-- Tasks -->
+          <section class="home-section" id="home-tasks-section">
+            <div class="home-section-header">
+              <span class="home-section-title">✅ Active Tasks</span>
+            </div>
+            <div id="home-tasks-list" class="home-loading">Loading…</div>
+          </section>
+        </div>
+
+        <!-- Projects Overview -->
+        <section class="home-section" id="home-projects-section">
+          <div class="home-section-header">
+            <span class="home-section-title">📁 Projects</span>
+          </div>
+          <div id="home-projects-grid" class="home-loading">Loading…</div>
+        </section>
+
+        <!-- Quick Actions -->
+        <section class="home-section home-quick-actions">
+          <div class="home-section-header">
+            <span class="home-section-title">⚡ Quick Actions</span>
+          </div>
+          <div class="quick-actions-row">
+            <button class="quick-action-btn" onclick="navigate('inbox')">
+              <span class="qa-icon">📥</span>
+              <span>Add Task</span>
+            </button>
+            <button class="quick-action-btn" onclick="navigate('projects')">
+              <span class="qa-icon">📁</span>
+              <span>Projects</span>
+            </button>
+            <button class="quick-action-btn" onclick="navigate('kanban')">
+              <span class="qa-icon">📋</span>
+              <span>Kanban</span>
+            </button>
+            <button class="quick-action-btn" onclick="navigate('schedule')">
+              <span class="qa-icon">🗓</span>
+              <span>Schedule</span>
+            </button>
+            <button class="quick-action-btn" onclick="navigate('overview')">
+              <span class="qa-icon">📊</span>
+              <span>Overview</span>
+            </button>
+            <button class="quick-action-btn" onclick="navigate('log')">
+              <span class="qa-icon">📜</span>
+              <span>Activity Log</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  `;
+
+  // Fetch and render data
+  refreshHomeData();
+}
+
+async function refreshHomeData() {
+  if (currentView !== 'home') return;
+  const data = await fetchJSON('/api/home');
+  if (!data || currentView !== 'home') return;
+
+  // Header stats
+  const alertEl = document.getElementById('home-stat-alerts');
+  const projEl = document.getElementById('home-stat-projects');
+  const taskEl = document.getElementById('home-stat-tasks');
+  if (alertEl) {
+    alertEl.textContent = `${data.stats.alerts_count} alert${data.stats.alerts_count !== 1 ? 's' : ''}`;
+    alertEl.className = 'home-stat-pill' + (data.stats.alerts_count > 0 ? ' red' : '');
+  }
+  if (projEl) projEl.textContent = `${data.stats.projects_active} projects`;
+  if (taskEl) taskEl.textContent = `${data.stats.tasks_in_progress + data.stats.tasks_todo} tasks`;
+
+  // Alerts
+  renderHomeAlerts(data.alerts);
+
+  // Schedule
+  renderHomeSchedule(data.schedule);
+
+  // Agents
+  renderHomeAgents(data.agents);
+
+  // Tasks
+  renderHomeTasks(data.tasks);
+
+  // Projects
+  renderHomeProjects(data.projects);
+}
+
+function renderHomeAlerts(alerts) {
+  const el = document.getElementById('home-alerts-list');
+  const count = document.getElementById('home-alerts-count');
+  if (!el) return;
+  if (count) {
+    count.textContent = alerts.length || '0';
+    count.className = 'home-section-badge' + (alerts.length > 0 ? ' badge-red' : '');
+  }
+  if (!alerts || alerts.length === 0) {
+    el.innerHTML = '<div class="home-empty">No active alerts — all clear ✓</div>';
+    return;
+  }
+  el.innerHTML = alerts.map(a => `
+    <div class="alert-row alert-${a.severity}" data-alert-id="${a.id}">
+      <span class="alert-icon">${a.severity === 'red' ? '🔴' : a.severity === 'amber' ? '🟡' : 'ℹ️'}</span>
+      <span class="alert-message">${escapeHtml(a.message)}</span>
+      <button class="alert-dismiss" onclick="dismissHomeAlert(${a.id})" title="Dismiss">×</button>
+    </div>
+  `).join('');
+}
+
+async function dismissHomeAlert(id) {
+  await fetchJSON(`/api/alerts/${id}/dismiss`, { method: 'POST' });
+  const row = document.querySelector(`[data-alert-id="${id}"]`);
+  if (row) row.remove();
+  // Update count
+  const remaining = document.querySelectorAll('.alert-row').length;
+  const count = document.getElementById('home-alerts-count');
+  if (count) {
+    count.textContent = remaining;
+    count.className = 'home-section-badge' + (remaining > 0 ? ' badge-red' : '');
+  }
+  const alertStat = document.getElementById('home-stat-alerts');
+  if (alertStat) {
+    alertStat.textContent = `${remaining} alert${remaining !== 1 ? 's' : ''}`;
+    alertStat.className = 'home-stat-pill' + (remaining > 0 ? ' red' : '');
+  }
+  if (remaining === 0) {
+    const el = document.getElementById('home-alerts-list');
+    if (el) el.innerHTML = '<div class="home-empty">No active alerts — all clear ✓</div>';
+  }
+}
+
+function renderHomeSchedule(schedule) {
+  const el = document.getElementById('home-schedule-list');
+  if (!el) return;
+  if (!schedule || schedule.length === 0) {
+    el.innerHTML = '<div class="home-empty">Nothing scheduled for today.</div>';
+    return;
+  }
+  el.innerHTML = `<div class="home-timeline">${schedule.map(s => `
+    <div class="timeline-item" style="--item-color:${escapeHtml(s.color || '#7c6bf0')}">
+      <div class="timeline-time">${escapeHtml(s.start_time)} – ${escapeHtml(s.end_time)}</div>
+      <div class="timeline-content">
+        <span class="timeline-title">${escapeHtml(s.title)}</span>
+        ${s.description ? `<span class="timeline-desc">${escapeHtml(s.description)}</span>` : ''}
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderHomeAgents(agents) {
+  const el = document.getElementById('home-agents-list');
+  if (!el) return;
+
+  const AGENT_ICONS = { jarvis: '🐶', klaus: '⚡', emily: '📧' };
+
+  el.innerHTML = agents.map(a => {
+    const isOnline = a.status && a.status !== 'offline' && !a.error;
+    const updatedAgo = a.updated_at ? (Date.now() - new Date(a.updated_at).getTime()) / 60000 : 999;
+    const stale = updatedAgo > 30;
+    const statusText = a.error ? 'Offline' : (a.status_text || a.status || 'Unknown');
+    const dotCls = a.error ? 'offline' : (a.status === 'busy' ? 'busy' : (stale ? 'idle' : 'online'));
+    return `
+      <div class="home-agent-card" onclick="navigate('agent/${a.name}')">
+        <div class="home-agent-icon">${AGENT_ICONS[a.name] || '🤖'}</div>
+        <div class="home-agent-info">
+          <div class="home-agent-name">
+            <span class="agent-dot ${dotCls}"></span>
+            ${a.name.charAt(0).toUpperCase() + a.name.slice(1)}
+          </div>
+          <div class="home-agent-status">${escapeHtml(statusText)}</div>
+          ${a.task ? `<div class="home-agent-task">${escapeHtml(a.task)}</div>` : ''}
+          ${a.model ? `<div class="home-agent-model">${escapeHtml(a.model)}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderHomeTasks(tasks) {
+  const el = document.getElementById('home-tasks-list');
+  if (!el) return;
+  if (!tasks || tasks.length === 0) {
+    el.innerHTML = '<div class="home-empty">No active tasks.</div>';
+    return;
+  }
+  el.innerHTML = tasks.slice(0, 8).map(t => `
+    <div class="home-task-row">
+      <span class="home-task-status-dot ${t.status === 'in_progress' ? 'in-progress' : 'todo'}"></span>
+      <span class="home-task-title">${escapeHtml(t.title)}</span>
+      ${t.priority && t.priority !== 'normal' ? `<span class="priority-badge ${t.priority}">${t.priority}</span>` : ''}
+    </div>
+  `).join('');
+}
+
+function renderHomeProjects(projects) {
+  const el = document.getElementById('home-projects-grid');
+  if (!el) return;
+  const active = projects.filter(p => p.status === 'active');
+  if (active.length === 0) {
+    el.innerHTML = '<div class="home-empty">No active projects.</div>';
+    return;
+  }
+  el.className = 'home-projects-grid';
+  el.innerHTML = active.map(p => `
+    <div class="home-project-card ${p.stale_level ? 'stale-' + p.stale_level : ''}" onclick="navigate('projects')">
+      <div class="home-project-icon">${p.icon || '📁'}</div>
+      <div class="home-project-info">
+        <div class="home-project-name">${escapeHtml(p.name)}${staleBadgeHtml(p.days_since_activity, p.stale_level)}</div>
+        <div class="home-project-meta">
+          <span class="project-status-tag ${p.status}">${p.status}</span>
+          <span class="home-project-activity" title="${p.last_activity_at || 'Never'}">${relativeActivityTime(p.last_activity_at)}</span>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
 
 async function renderOverview(container) {
   container.innerHTML = `
@@ -2011,7 +2318,7 @@ function renderProjectOverview() {
             <div class="po-card-header">
               <span class="po-card-icon">${p.icon || '📁'}</span>
               <div class="po-card-title-area">
-                <div class="po-card-name">${escapeHtml(p.name)}</div>
+                <div class="po-card-name">${escapeHtml(p.name)}${(() => { const d = p.last_activity_at ? Math.floor((Date.now() - new Date(p.last_activity_at).getTime()) / 86400000) : 999; return d >= 5 ? `<span class="stale-badge stale-red" title="No activity for ${d} days">⚠ ${d}d</span>` : d >= 3 ? `<span class="stale-badge stale-amber" title="No activity for ${d} days">⚠ ${d}d</span>` : ''; })()}</div>
                 ${p.tagline ? `<div class="po-card-tagline">${escapeHtml(p.tagline)}</div>` : ''}
               </div>
               <span class="project-status-badge" style="background:${statusColor}">${p.status}</span>
@@ -3428,6 +3735,257 @@ async function executePromote(ideaId) {
       loadView('projects');
       setTimeout(() => selectProject(result.project_id), 500);
     }
+  }
+}
+
+// ==================== WORKSPACE ====================
+
+let wsSelectedFile = null;
+let wsContent = '';
+let wsSavedContent = '';
+let wsPreview = false;
+let wsExpandedDirs = new Set();
+
+async function renderWorkspace(container) {
+  container.innerHTML = `
+    <div class="view-container workspace-view">
+      <div class="ws-layout">
+        <div class="ws-tree-panel">
+          <div class="ws-tree-header">
+            <span class="ws-tree-title">Workspace</span>
+            <button class="ws-new-btn" onclick="wsNewFile()" title="New file">+</button>
+          </div>
+          <div class="ws-tree" id="ws-tree">
+            <div class="loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+        <div class="ws-editor-panel" id="ws-editor-panel">
+          <div class="ws-empty-state">
+            <div class="placeholder-icon">🗂️</div>
+            <div class="placeholder-text">Select a file to edit</div>
+            <div class="placeholder-sub">Click any file in the tree</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  await loadWsTree();
+}
+
+async function loadWsTree() {
+  const el = document.getElementById('ws-tree');
+  if (!el) return;
+  const tree = await fetchJSON('/api/workspace/tree');
+  if (!tree) { el.innerHTML = '<div class="ws-error">Failed to load</div>'; return; }
+  el.innerHTML = renderWsTree(tree.children || [], 0);
+}
+
+function wsFileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  if (ext === 'md') return '📄';
+  if (ext === 'json') return '📋';
+  if (ext === 'js' || ext === 'ts') return '📜';
+  if (ext === 'sh') return '⚙️';
+  if (ext === 'txt') return '📃';
+  if (ext === 'csv') return '📊';
+  if (ext === 'yaml' || ext === 'yml') return '⚙️';
+  return '📄';
+}
+
+function renderWsTree(nodes, depth) {
+  if (!nodes || nodes.length === 0) return '';
+  return nodes.map(node => {
+    const indent = depth * 14;
+    if (node.type === 'dir') {
+      const expanded = wsExpandedDirs.has(node.path);
+      return `
+        <div class="ws-tree-dir ${expanded ? 'expanded' : ''}" style="padding-left:${indent}px" onclick="wsToggleDir('${escapeHtml(node.path)}', event)">
+          <span class="ws-dir-arrow">${expanded ? '▾' : '▸'}</span>
+          <span class="ws-dir-icon">📁</span>
+          <span class="ws-name">${escapeHtml(node.name)}</span>
+        </div>
+        <div class="ws-tree-children" id="wsdir-${CSS.escape(node.path)}" style="display:${expanded ? 'block' : 'none'}">
+          ${renderWsTree(node.children || [], depth + 1)}
+        </div>
+      `;
+    } else {
+      const isActive = wsSelectedFile === node.path;
+      return `
+        <div class="ws-tree-file ${isActive ? 'active' : ''}" style="padding-left:${indent + 14}px" onclick="wsOpenFile('${escapeHtml(node.path)}')" title="${escapeHtml(node.path)}">
+          <span class="ws-file-icon">${wsFileIcon(node.name)}</span>
+          <span class="ws-name">${escapeHtml(node.name)}</span>
+        </div>
+      `;
+    }
+  }).join('');
+}
+
+function wsToggleDir(dirPath, e) {
+  e.stopPropagation();
+  if (wsExpandedDirs.has(dirPath)) {
+    wsExpandedDirs.delete(dirPath);
+  } else {
+    wsExpandedDirs.add(dirPath);
+  }
+  loadWsTree();
+}
+
+async function wsOpenFile(filePath) {
+  if (wsSelectedFile && wsContent !== wsSavedContent) {
+    if (!confirm('You have unsaved changes. Discard?')) return;
+  }
+  wsSelectedFile = filePath;
+  wsPreview = false;
+  const panel = document.getElementById('ws-editor-panel');
+  if (!panel) return;
+  panel.innerHTML = '<div class="loading" style="padding:2rem"><div class="spinner"></div> Loading...</div>';
+  await loadWsTree();
+
+  const data = await fetchJSON(`/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+  if (!data) { panel.innerHTML = '<div class="ws-error" style="padding:1rem">Failed to load file</div>'; return; }
+
+  wsContent = data.content || '';
+  wsSavedContent = wsContent;
+  renderWsEditorPanel(panel, filePath);
+}
+
+function renderWsEditorPanel(panel, filePath) {
+  const name = filePath.split('/').pop();
+  const isMarkdown = name.endsWith('.md');
+  const dirty = wsContent !== wsSavedContent;
+
+  panel.innerHTML = `
+    <div class="ws-editor-header">
+      <div class="ws-editor-file">
+        <span class="ws-editor-filename">${escapeHtml(name)}</span>
+        <span class="ws-unsaved-dot ${dirty ? 'visible' : ''}" id="ws-unsaved-dot" title="Unsaved changes"></span>
+      </div>
+      <div class="ws-editor-actions">
+        ${isMarkdown ? `<button class="ws-btn ${wsPreview ? 'active' : ''}" onclick="wsTogglePreview()" id="ws-preview-btn">Preview</button>` : ''}
+        <button class="ws-btn ws-save-btn" onclick="wsSave()" id="ws-save-btn">Save</button>
+      </div>
+    </div>
+    <div class="ws-editor-body" id="ws-editor-body">
+      <div class="ws-editor-wrap ${wsPreview ? 'hidden' : ''}\" id="ws-editor-wrap">
+        <div class="ws-line-numbers" id="ws-line-numbers"></div>
+        <textarea class="ws-textarea" id="ws-textarea" spellcheck="false">${escapeHtml(wsContent)}</textarea>
+      </div>
+      ${isMarkdown ? `<div class="ws-preview markdown-body ${wsPreview ? '' : 'hidden'}" id="ws-preview">${renderMarkdown(wsContent)}</div>` : ''}
+    </div>
+  `;
+
+  const ta = document.getElementById('ws-textarea');
+  if (ta) {
+    // Unescape for actual editing
+    ta.value = wsContent;
+    wsUpdateLineNumbers();
+    ta.addEventListener('input', wsOnInput);
+    ta.addEventListener('scroll', wsOnScroll);
+    ta.addEventListener('keydown', wsOnKeydown);
+  }
+}
+
+function wsOnInput() {
+  const ta = document.getElementById('ws-textarea');
+  if (!ta) return;
+  wsContent = ta.value;
+  const dot = document.getElementById('ws-unsaved-dot');
+  if (dot) dot.classList.toggle('visible', wsContent !== wsSavedContent);
+  wsUpdateLineNumbers();
+}
+
+function wsOnScroll() {
+  const ta = document.getElementById('ws-textarea');
+  const ln = document.getElementById('ws-line-numbers');
+  if (ta && ln) ln.scrollTop = ta.scrollTop;
+}
+
+function wsUpdateLineNumbers() {
+  const ta = document.getElementById('ws-textarea');
+  const ln = document.getElementById('ws-line-numbers');
+  if (!ta || !ln) return;
+  const lines = ta.value.split('\n').length;
+  let html = '';
+  for (let i = 1; i <= lines; i++) html += `<div>${i}</div>`;
+  ln.innerHTML = html;
+}
+
+function wsOnKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    wsSave();
+  }
+  // Tab inserts spaces
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const ta = e.target;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+    ta.selectionStart = ta.selectionEnd = start + 2;
+    wsOnInput();
+  }
+}
+
+async function wsSave() {
+  if (!wsSelectedFile) return;
+  const ta = document.getElementById('ws-textarea');
+  const content = ta ? ta.value : wsContent;
+  const btn = document.getElementById('ws-save-btn');
+  if (btn) { btn.textContent = 'Saving...'; btn.disabled = true; }
+
+  const res = await fetch(`/api/workspace/file?path=${encodeURIComponent(wsSelectedFile)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content })
+  });
+
+  if (btn) { btn.textContent = 'Save'; btn.disabled = false; }
+  if (res.ok) {
+    wsContent = content;
+    wsSavedContent = content;
+    const dot = document.getElementById('ws-unsaved-dot');
+    if (dot) dot.classList.remove('visible');
+    // Flash save confirmation
+    if (btn) { btn.textContent = 'Saved!'; setTimeout(() => { if (btn) btn.textContent = 'Save'; }, 1500); }
+  }
+}
+
+function wsTogglePreview() {
+  const ta = document.getElementById('ws-textarea');
+  if (ta) wsContent = ta.value;
+  wsPreview = !wsPreview;
+  const panel = document.getElementById('ws-editor-panel');
+  if (!panel) return;
+  const editorWrap = document.getElementById('ws-editor-wrap');
+  const previewDiv = document.getElementById('ws-preview');
+  const btn = document.getElementById('ws-preview-btn');
+
+  if (wsPreview) {
+    if (editorWrap) editorWrap.classList.add('hidden');
+    if (previewDiv) { previewDiv.innerHTML = renderMarkdown(wsContent); previewDiv.classList.remove('hidden'); }
+    if (btn) btn.classList.add('active');
+  } else {
+    if (editorWrap) editorWrap.classList.remove('hidden');
+    if (previewDiv) previewDiv.classList.add('hidden');
+    if (btn) btn.classList.remove('active');
+    setTimeout(() => { const t = document.getElementById('ws-textarea'); if (t) { t.value = wsContent; wsUpdateLineNumbers(); } }, 0);
+  }
+}
+
+async function wsNewFile() {
+  const name = prompt('New file name (e.g. notes.md):');
+  if (!name || !name.trim()) return;
+  const filePath = name.trim();
+  if (filePath.includes('..') || filePath.startsWith('/')) { alert('Invalid filename'); return; }
+  const res = await fetch(`/api/workspace/file?path=${encodeURIComponent(filePath)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: '' })
+  });
+  if (res.ok) {
+    await loadWsTree();
+    wsOpenFile(filePath);
   }
 }
 

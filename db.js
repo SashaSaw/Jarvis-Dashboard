@@ -296,6 +296,12 @@ db.exec(`
   `);
   try { db.exec(`ALTER TABLE features ADD COLUMN prompt TEXT`); } catch(e) { /* already exists */ }
   try { db.exec(`ALTER TABLE features ADD COLUMN testing TEXT`); } catch(e) { /* already exists */ }
+
+  // Migration: last_activity_at + warning_dismissed_at on projects
+  try { db.exec(`ALTER TABLE projects ADD COLUMN last_activity_at TEXT`); } catch(e) {}
+  try { db.exec(`ALTER TABLE projects ADD COLUMN warning_dismissed_at TEXT`); } catch(e) {}
+  db.exec(`UPDATE projects SET last_activity_at = updated_at WHERE last_activity_at IS NULL`);
+
   db.exec(`
 
   CREATE TABLE IF NOT EXISTS project_tags (
@@ -513,6 +519,49 @@ const updateFeedback = db.prepare(`
 
 const deleteFeedback = db.prepare(`DELETE FROM project_feedback WHERE id = @id`);
 
+// --- Alerts ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    entity_id TEXT,
+    entity_type TEXT,
+    severity TEXT DEFAULT 'info',
+    message TEXT NOT NULL,
+    dismissed_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(type, entity_id)
+  );
+`);
+
+const touchProjectActivity = db.prepare(`
+  UPDATE projects SET last_activity_at = datetime('now'), updated_at = datetime('now') WHERE id = @id
+`);
+
+const getActiveAlerts = db.prepare(`SELECT * FROM alerts WHERE dismissed_at IS NULL ORDER BY created_at DESC`);
+const getAlertById = db.prepare(`SELECT * FROM alerts WHERE id = @id`);
+const dismissAlert = db.prepare(`UPDATE alerts SET dismissed_at = datetime('now'), updated_at = datetime('now') WHERE id = @id`);
+
+const upsertAlert = db.prepare(`
+  INSERT INTO alerts (type, entity_id, entity_type, severity, message, created_at, updated_at)
+  VALUES (@type, @entity_id, @entity_type, @severity, @message, datetime('now'), datetime('now'))
+  ON CONFLICT(type, entity_id) DO UPDATE SET
+    severity = @severity,
+    message = @message,
+    dismissed_at = CASE WHEN dismissed_at IS NOT NULL AND severity != excluded.severity THEN NULL ELSE dismissed_at END,
+    updated_at = datetime('now')
+`);
+
+const deleteAlertByTypeEntity = db.prepare(`DELETE FROM alerts WHERE type = @type AND entity_id = @entity_id`);
+
+const getProjectsForStaleness = db.prepare(`
+  SELECT id, name, icon, status, last_activity_at, warning_dismissed_at
+  FROM projects
+  WHERE status = 'active'
+`);
+
 module.exports = {
   db,
   insertEvent,
@@ -573,7 +622,15 @@ module.exports = {
   getFeedbackByProject,
   getFeedbackById,
   updateFeedback,
-  deleteFeedback
+  deleteFeedback,
+  // Alerts
+  touchProjectActivity,
+  getActiveAlerts,
+  getAlertById,
+  dismissAlert,
+  upsertAlert,
+  deleteAlertByTypeEntity,
+  getProjectsForStaleness
 };
 
 // --- Ideas ---

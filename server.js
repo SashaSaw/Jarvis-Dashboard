@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -527,6 +527,40 @@ app.get('/api/log/stats', (req, res) => {
 
 // --- Project Hub API ---
 
+// Touch last_activity_at on any project mutation (sections, features, tags, feedback)
+app.use('/api/projects/:id', (req, res, next) => {
+  if (['POST', 'PUT', 'DELETE'].includes(req.method) && req.params.id) {
+    try { touchProjectActivity.run({ id: req.params.id }); } catch(e) {}
+  }
+  next();
+});
+
+// --- Alert Generation ---
+
+function generateAlerts() {
+  const projects = getProjectsForStaleness.all();
+  const now = Date.now();
+  for (const p of projects) {
+    const lastActivity = p.last_activity_at ? new Date(p.last_activity_at).getTime() : 0;
+    const daysSince = (now - lastActivity) / 86400000;
+
+    if (daysSince >= 3) {
+      const severity = daysSince >= 5 ? 'red' : 'amber';
+      const days = Math.floor(daysSince);
+      upsertAlert.run({
+        type: 'stale_project',
+        entity_id: p.id,
+        entity_type: 'project',
+        severity,
+        message: `${p.icon || '📁'} ${p.name} has had no activity for ${days} day${days !== 1 ? 's' : ''}`
+      });
+    } else {
+      // Project is active again — remove any stale alert
+      try { deleteAlertByTypeEntity.run({ type: 'stale_project', entity_id: p.id }); } catch(e) {}
+    }
+  }
+}
+
 // Projects
 app.get('/api/projects', (req, res) => {
   try {
@@ -875,6 +909,95 @@ app.delete('/api/projects/:id/feedback/:feedbackId', (req, res) => {
   try {
     deleteFeedback.run({ id: parseInt(req.params.feedbackId) });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Alerts API ---
+
+app.get('/api/alerts', (req, res) => {
+  try {
+    generateAlerts();
+    const alerts = getActiveAlerts.all();
+    res.json(alerts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/alerts/:id/dismiss', (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+    dismissAlert.run({ id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Home API ---
+
+app.get('/api/home', async (req, res) => {
+  try {
+    generateAlerts();
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Schedule for today
+    const schedule = getScheduleByDate.all({ date: today });
+
+    // Agent statuses
+    const agentNames = ['jarvis', 'klaus', 'emily'];
+    const agents = agentNames.map(name => {
+      const s = loadAgentStatus(name);
+      return { name, ...s };
+    });
+
+    // Active alerts
+    const alerts = getActiveAlerts.all();
+
+    // Projects with staleness
+    const allProjects = getProjects.all();
+    const now = Date.now();
+    const projects = allProjects.map(p => {
+      const lastActivity = p.last_activity_at ? new Date(p.last_activity_at).getTime() : 0;
+      const daysSince = (now - lastActivity) / 86400000;
+      return {
+        ...p,
+        days_since_activity: Math.floor(daysSince),
+        stale_level: daysSince >= 5 ? 'red' : daysSince >= 3 ? 'amber' : null
+      };
+    });
+
+    // In-progress and todo tasks
+    const tasks = getTasks.all({ status: null, category: null })
+      .filter(t => ['todo', 'in_progress'].includes(t.status))
+      .slice(0, 20);
+
+    // Stats
+    const allTasks = getTasks.all({ status: null, category: null });
+    const stats = {
+      projects_active: allProjects.filter(p => p.status === 'active').length,
+      projects_paused: allProjects.filter(p => p.status === 'paused').length,
+      projects_archived: allProjects.filter(p => p.status === 'archived').length,
+      tasks_todo: allTasks.filter(t => t.status === 'todo').length,
+      tasks_in_progress: allTasks.filter(t => t.status === 'in_progress').length,
+      tasks_done: allTasks.filter(t => t.status === 'done').length,
+      tasks_inbox: allTasks.filter(t => t.status === 'inbox').length,
+      alerts_count: alerts.length
+    };
+
+    res.json({
+      goals: [],
+      schedule,
+      agents,
+      alerts,
+      projects,
+      tasks,
+      stats
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1631,6 +1754,75 @@ app.post('/api/chat/send', (req, res) => {
     broadcastChatMessage(msg);
     res.json(msg);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- Workspace API ---
+
+const WORKSPACE_ROOT = '/home/sasha/.openclaw/workspace';
+
+function validateWorkspacePath(relPath) {
+  if (!relPath || typeof relPath !== 'string') return null;
+  // Reject absolute paths and path traversal
+  if (relPath.startsWith('/') || relPath.startsWith('~')) return null;
+  if (relPath.split('/').some(seg => seg === '..')) return null;
+  const abs = path.resolve(WORKSPACE_ROOT, relPath);
+  if (!abs.startsWith(WORKSPACE_ROOT + path.sep) && abs !== WORKSPACE_ROOT) return null;
+  return abs;
+}
+
+function buildDirTree(dir, relBase) {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const children = [];
+  for (const e of entries) {
+    if (e.name.startsWith('.')) continue; // skip hidden
+    const relPath = relBase ? `${relBase}/${e.name}` : e.name;
+    if (e.isDirectory()) {
+      children.push({ name: e.name, type: 'dir', path: relPath, children: buildDirTree(path.join(dir, e.name), relPath) });
+    } else {
+      children.push({ name: e.name, type: 'file', path: relPath });
+    }
+  }
+  children.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return children;
+}
+
+app.get('/api/workspace/tree', (req, res) => {
+  try {
+    if (!fs.existsSync(WORKSPACE_ROOT)) fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
+    const tree = buildDirTree(WORKSPACE_ROOT, '');
+    res.json({ name: 'workspace', type: 'dir', path: '', children: tree });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/workspace/file', (req, res) => {
+  try {
+    const abs = validateWorkspacePath(req.query.path);
+    if (!abs) return res.status(400).json({ error: 'Invalid path' });
+    if (!fs.existsSync(abs)) return res.status(404).json({ error: 'File not found' });
+    const content = fs.readFileSync(abs, 'utf8');
+    res.json({ path: req.query.path, content });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/workspace/file', (req, res) => {
+  try {
+    const abs = validateWorkspacePath(req.query.path);
+    if (!abs) return res.status(400).json({ error: 'Invalid path' });
+    const content = req.body.content;
+    if (content === undefined) return res.status(400).json({ error: 'content required' });
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content, 'utf8');
+    res.json({ ok: true, path: req.query.path });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
