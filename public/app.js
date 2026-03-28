@@ -3013,7 +3013,11 @@ let projectHubState = {
   editingFeature: null,
   openTabs: [],       // [{id, name, icon}]
   activeTab: null,    // project id or null (null = overview)
-  showOverview: true  // show grid overview
+  showOverview: true, // show grid overview
+  expandedConcept: null,   // concept id currently expanded
+  revealedHints: {},       // conceptId -> bool
+  revealedExplanations: {}, // conceptId -> bool
+  learningFilter: 'all'    // all | unseen | needs_review | understood
 };
 
 const FEATURE_STATUSES = [
@@ -3025,7 +3029,21 @@ const FEATURE_STATUSES = [
 
 const SECTION_ICONS = {
   concept: '💭', tech: '⚙️', marketing: '📣', feedback_intro: '💬',
-  flows: '🔀', kanban: '📋', app_flow: '📊'
+  flows: '🔀', kanban: '📋', app_flow: '📊', learning: '🧠'
+};
+
+const TECH_BADGE_COLORS = {
+  'SwiftUI': { bg: 'rgba(0,122,255,0.15)', color: '#4da6ff', border: 'rgba(0,122,255,0.3)' },
+  'Swift': { bg: 'rgba(255,95,0,0.15)', color: '#ff7030', border: 'rgba(255,95,0,0.3)' },
+  'Screen Time API': { bg: 'rgba(255,149,0,0.15)', color: '#ffaa33', border: 'rgba(255,149,0,0.3)' },
+  'Core Data': { bg: 'rgba(88,86,214,0.15)', color: '#a0a0ff', border: 'rgba(88,86,214,0.3)' },
+  'Firebase': { bg: 'rgba(255,196,0,0.15)', color: '#ffcc33', border: 'rgba(255,196,0,0.3)' },
+  'Spotify API': { bg: 'rgba(30,215,96,0.15)', color: '#1ed760', border: 'rgba(30,215,96,0.3)' },
+  'React': { bg: 'rgba(97,218,251,0.15)', color: '#61dafb', border: 'rgba(97,218,251,0.3)' },
+  'React Native': { bg: 'rgba(97,218,251,0.15)', color: '#61dafb', border: 'rgba(97,218,251,0.3)' },
+  'Node.js': { bg: 'rgba(83,158,56,0.15)', color: '#68c244', border: 'rgba(83,158,56,0.3)' },
+  'TypeScript': { bg: 'rgba(49,120,198,0.15)', color: '#4a9edd', border: 'rgba(49,120,198,0.3)' },
+  'default': { bg: 'rgba(124,107,240,0.15)', color: '#a78bfa', border: 'rgba(124,107,240,0.3)' }
 };
 
 const PROJECT_STATUS_COLORS = {
@@ -3288,6 +3306,7 @@ function renderProjectHub() {
     ${renderAppFlowSection(getSection('app_flow'), p.id)}
     ${renderProjectSection('flows', 'App Flows', getSection('flows'), p.id)}
     ${renderProjectSection('tech', 'Tech Stack', getSection('tech'), p.id)}
+    ${getSection('learning') ? renderLearningSection(p) : ''}
   `;
 
   // Run mermaid on any app_flow diagrams
@@ -3594,6 +3613,241 @@ async function saveProjectSection(type, sectionId, projectId) {
     });
   }
   projectHubState.editingSection = null;
+  await selectProjectPreserveScroll(projectId);
+}
+
+// --- Learning Section ---
+
+function renderLearningSection(p) {
+  const concepts = p.concepts || [];
+  const filter = projectHubState.learningFilter || 'all';
+  const isCollapsed = projectHubState.collapsedSections['learning'] !== undefined
+    ? projectHubState.collapsedSections['learning']
+    : false;
+
+  const total = concepts.length;
+  const understood = concepts.filter(c => c.status === 'understood').length;
+  const needsReview = concepts.filter(c => c.status === 'needs_review').length;
+  const unseen = concepts.filter(c => c.status === 'unseen').length;
+  const pct = total ? Math.round((understood / total) * 100) : 0;
+
+  const filtered = filter === 'all' ? concepts
+    : concepts.filter(c => {
+        if (filter === 'unseen') return c.status === 'unseen' || c.status === 'asked';
+        if (filter === 'needs_review') return c.status === 'needs_review';
+        if (filter === 'understood') return c.status === 'understood';
+        return true;
+      });
+
+  return `
+    <div class="project-section-card learning-section-card">
+      <div class="project-section-header" onclick="toggleProjectSection('learning')">
+        <span class="project-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+        <span class="project-section-icon">🧠</span>
+        <span class="project-section-title">Tech Stack Learning</span>
+        <div class="learning-progress-inline" onclick="event.stopPropagation()">
+          <span class="learning-progress-label">${understood}/${total} understood</span>
+          <div class="learning-progress-bar">
+            <div class="learning-progress-fill ${pct >= 80 ? 'complete' : pct >= 40 ? 'partial' : 'low'}" style="width:${pct}%"></div>
+          </div>
+        </div>
+        <button class="btn-doc-action" onclick="event.stopPropagation(); openAddConceptForm('${p.id}')" style="margin-left:0.5rem">+ Concept</button>
+      </div>
+      ${!isCollapsed ? `
+        <div class="project-section-body">
+          <div class="learning-overview-stats">
+            <span class="learning-stat-pill unseen" onclick="setLearningFilter('all')" class="${filter==='all'?'active':''}">All <b>${total}</b></span>
+            <span class="learning-stat-pill unseen ${filter==='unseen'?'lf-active':''}" onclick="setLearningFilter('unseen')">Unseen <b>${unseen}</b></span>
+            <span class="learning-stat-pill review ${filter==='needs_review'?'lf-active':''}" onclick="setLearningFilter('needs_review')">Needs Review <b>${needsReview}</b></span>
+            <span class="learning-stat-pill understood ${filter==='understood'?'lf-active':''}" onclick="setLearningFilter('understood')">Understood <b>${understood}</b></span>
+          </div>
+          ${filtered.length === 0 ? `<div class="project-section-empty">No concepts match this filter.</div>` : ''}
+          <div class="concept-cards-list">
+            ${filtered.map(c => renderConceptCard(c, p.id)).join('')}
+          </div>
+          <div id="add-concept-form-${p.id}" style="display:none">
+            ${renderAddConceptForm(p.id)}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function getTechBadgeStyle(techName) {
+  const t = TECH_BADGE_COLORS[techName] || TECH_BADGE_COLORS['default'];
+  return `background:${t.bg};color:${t.color};border:1px solid ${t.border}`;
+}
+
+function renderConceptCard(c, projectId) {
+  const isExpanded = projectHubState.expandedConcept === c.id;
+  const hintRevealed = projectHubState.revealedHints[c.id];
+  const explRevealed = projectHubState.revealedExplanations[c.id];
+
+  const statusConfig = {
+    unseen:       { icon: '🔵', label: 'Unseen',       cls: 'status-unseen' },
+    asked:        { icon: '🟡', label: 'Asked',        cls: 'status-asked' },
+    understood:   { icon: '✅', label: 'Understood',   cls: 'status-understood' },
+    needs_review: { icon: '🔄', label: 'Needs Review', cls: 'status-review' }
+  };
+  const diffConfig = {
+    beginner:     { label: 'Beginner',     cls: 'diff-beginner' },
+    intermediate: { label: 'Intermediate', cls: 'diff-intermediate' },
+    advanced:     { label: 'Advanced',     cls: 'diff-advanced' }
+  };
+
+  const st = statusConfig[c.status] || statusConfig.unseen;
+  const df = diffConfig[c.difficulty] || diffConfig.beginner;
+
+  return `
+    <div class="concept-card ${isExpanded ? 'expanded' : ''} ${st.cls}">
+      <div class="concept-card-header" onclick="toggleConceptExpand(${c.id})">
+        <span class="tech-badge" style="${getTechBadgeStyle(c.tech_name)}">${escapeHtml(c.tech_name)}</span>
+        <span class="concept-card-title">${escapeHtml(c.concept_title)}</span>
+        <div class="concept-card-badges">
+          <span class="concept-status-badge ${st.cls}">${st.icon} ${st.label}</span>
+          <span class="concept-diff-badge ${df.cls}">${df.label}</span>
+        </div>
+        <span class="concept-expand-arrow">${isExpanded ? '▲' : '▼'}</span>
+      </div>
+      ${isExpanded ? `
+        <div class="concept-card-body">
+          <div class="concept-question-panel">
+            <div class="concept-question-label">🎯 Jarvis asks:</div>
+            <div class="concept-question-text">${escapeHtml(c.question)}</div>
+            <textarea class="concept-answer-textarea" id="concept-answer-${c.id}" placeholder="Type your answer attempt here..."></textarea>
+            <div class="concept-action-row">
+              ${c.answer_hint ? `
+                <button class="btn-concept-hint" onclick="toggleConceptHint(${c.id})">
+                  ${hintRevealed ? '🙈 Hide Hint' : '💡 Show Hint'}
+                </button>
+              ` : ''}
+              <button class="btn-concept-understood" onclick="setConceptStatus(${c.id}, 'understood', '${projectId}')">✅ Understood</button>
+              <button class="btn-concept-review" onclick="setConceptStatus(${c.id}, 'needs_review', '${projectId}')">🔄 Need to Review</button>
+              <button class="btn-concept-delete" onclick="deleteLearningConcept(${c.id}, '${projectId}')">🗑</button>
+            </div>
+            ${hintRevealed && c.answer_hint ? `
+              <div class="concept-hint-box">
+                <span class="concept-hint-label">💡 Hint:</span> ${escapeHtml(c.answer_hint)}
+              </div>
+            ` : ''}
+          </div>
+          <div class="concept-explanation-toggle" onclick="toggleConceptExplanation(${c.id})">
+            ${explRevealed ? '▲ Hide Explanation' : '▶ Show Full Explanation'}
+          </div>
+          ${explRevealed ? `
+            <div class="concept-explanation-box">
+              <div class="markdown-body">${renderMarkdown(c.explanation)}</div>
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderAddConceptForm(projectId) {
+  return `
+    <div class="concept-add-form">
+      <div class="concept-add-form-title">+ Add Concept</div>
+      <div class="concept-form-row">
+        <input class="concept-form-input" id="cf-tech-${projectId}" placeholder="Tech name (e.g. SwiftUI)" />
+        <select class="concept-form-select" id="cf-diff-${projectId}">
+          <option value="beginner">Beginner</option>
+          <option value="intermediate">Intermediate</option>
+          <option value="advanced">Advanced</option>
+        </select>
+      </div>
+      <input class="concept-form-input" id="cf-title-${projectId}" placeholder="Concept title" style="width:100%" />
+      <textarea class="concept-form-textarea" id="cf-explanation-${projectId}" placeholder="Explanation (markdown supported)" rows="3"></textarea>
+      <textarea class="concept-form-textarea" id="cf-question-${projectId}" placeholder="Socratic question to ask Sasha" rows="2"></textarea>
+      <input class="concept-form-input" id="cf-hint-${projectId}" placeholder="Answer hint (optional)" style="width:100%" />
+      <div class="concept-form-actions">
+        <button class="btn-move" onclick="submitAddConcept('${projectId}')">Save Concept</button>
+        <button class="btn-archive" onclick="closeAddConceptForm('${projectId}')">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
+function toggleConceptExpand(conceptId) {
+  if (projectHubState.expandedConcept === conceptId) {
+    projectHubState.expandedConcept = null;
+  } else {
+    projectHubState.expandedConcept = conceptId;
+    // Mark as asked if unseen
+    const p = projectHubState.projectData;
+    if (p) {
+      const concept = (p.concepts || []).find(c => c.id === conceptId);
+      if (concept && concept.status === 'unseen') {
+        setConceptStatus(conceptId, 'asked', p.id, false);
+      }
+    }
+  }
+  renderProjectHub();
+}
+
+function toggleConceptHint(conceptId) {
+  projectHubState.revealedHints[conceptId] = !projectHubState.revealedHints[conceptId];
+  renderProjectHub();
+}
+
+function toggleConceptExplanation(conceptId) {
+  projectHubState.revealedExplanations[conceptId] = !projectHubState.revealedExplanations[conceptId];
+  renderProjectHub();
+}
+
+async function setConceptStatus(conceptId, status, projectId, reload = true) {
+  await fetchJSON(`/api/projects/${projectId}/concepts/${conceptId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  if (reload) {
+    await selectProjectPreserveScroll(projectId);
+  }
+}
+
+async function deleteLearningConcept(conceptId, projectId) {
+  if (!confirm('Delete this concept?')) return;
+  await fetchJSON(`/api/projects/${projectId}/concepts/${conceptId}`, { method: 'DELETE' });
+  if (projectHubState.expandedConcept === conceptId) projectHubState.expandedConcept = null;
+  await selectProjectPreserveScroll(projectId);
+}
+
+function setLearningFilter(filter) {
+  projectHubState.learningFilter = filter;
+  renderProjectHub();
+}
+
+function openAddConceptForm(projectId) {
+  const el = document.getElementById(`add-concept-form-${projectId}`);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function closeAddConceptForm(projectId) {
+  const el = document.getElementById(`add-concept-form-${projectId}`);
+  if (el) el.style.display = 'none';
+}
+
+async function submitAddConcept(projectId) {
+  const tech = document.getElementById(`cf-tech-${projectId}`)?.value?.trim();
+  const title = document.getElementById(`cf-title-${projectId}`)?.value?.trim();
+  const explanation = document.getElementById(`cf-explanation-${projectId}`)?.value?.trim();
+  const question = document.getElementById(`cf-question-${projectId}`)?.value?.trim();
+  const hint = document.getElementById(`cf-hint-${projectId}`)?.value?.trim();
+  const diff = document.getElementById(`cf-diff-${projectId}`)?.value || 'beginner';
+
+  if (!tech || !title || !explanation || !question) {
+    alert('Tech name, title, explanation, and question are required.');
+    return;
+  }
+
+  await fetchJSON(`/api/projects/${projectId}/concepts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tech_name: tech, concept_title: title, explanation, question, answer_hint: hint || null, difficulty: diff })
+  });
   await selectProjectPreserveScroll(projectId);
 }
 

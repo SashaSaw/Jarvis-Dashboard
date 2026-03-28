@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, getLogTotalCount, getLogTodayCount, getLogDailyActivity, getLogTopActionsAll, logDb, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, getLogTotalCount, getLogTodayCount, getLogDailyActivity, getLogTopActionsAll, logDb, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects, insertConcept, getConceptsByProject, getConceptById, updateConcept, deleteConcept, getLearningStats } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -825,7 +825,8 @@ app.get('/api/projects/:id', (req, res) => {
     const tags = getTagsByProject.all({ project_id: req.params.id });
     const features = getFeaturesByProject.all({ project_id: req.params.id });
     const feedback = getFeedbackByProject.all({ project_id: req.params.id });
-    res.json({ ...project, sections, tags, features, feedback });
+    const concepts = getConceptsByProject.all({ project_id: req.params.id });
+    res.json({ ...project, sections, tags, features, feedback, concepts });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -947,6 +948,78 @@ app.delete('/api/projects/:id/sections/:sectionId', (req, res) => {
   try {
     deleteSection.run({ id: parseInt(req.params.sectionId) });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Learning Concepts
+app.get('/api/projects/:id/concepts', (req, res) => {
+  try {
+    const concepts = getConceptsByProject.all({ project_id: req.params.id });
+    res.json(concepts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:id/concepts', (req, res) => {
+  try {
+    const { tech_name, concept_title, explanation, question, answer_hint, difficulty, sort_order } = req.body;
+    if (!tech_name || !concept_title || !explanation || !question) {
+      return res.status(400).json({ error: 'tech_name, concept_title, explanation, question required' });
+    }
+    const result = insertConcept.run({
+      project_id: req.params.id,
+      tech_name,
+      concept_title,
+      explanation,
+      question,
+      answer_hint: answer_hint || null,
+      difficulty: difficulty || 'beginner',
+      sort_order: sort_order || 0
+    });
+    const concept = getConceptById.get({ id: result.lastInsertRowid });
+    res.json(concept);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/projects/:id/concepts/:conceptId', (req, res) => {
+  try {
+    const { tech_name, concept_title, explanation, question, answer_hint, difficulty, status, sort_order } = req.body;
+    updateConcept.run({
+      id: parseInt(req.params.conceptId),
+      tech_name: tech_name !== undefined ? tech_name : null,
+      concept_title: concept_title !== undefined ? concept_title : null,
+      explanation: explanation !== undefined ? explanation : null,
+      question: question !== undefined ? question : null,
+      answer_hint: answer_hint !== undefined ? answer_hint : null,
+      difficulty: difficulty !== undefined ? difficulty : null,
+      status: status !== undefined ? status : null,
+      sort_order: sort_order !== undefined ? sort_order : null
+    });
+    const concept = getConceptById.get({ id: parseInt(req.params.conceptId) });
+    res.json(concept);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:id/concepts/:conceptId', (req, res) => {
+  try {
+    deleteConcept.run({ id: parseInt(req.params.conceptId) });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/learning/stats', (req, res) => {
+  try {
+    const stats = getLearningStats.get();
+    res.json(stats);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

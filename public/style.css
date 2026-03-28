@@ -8189,3 +8189,344 @@ body {
     min-width: 420px;
   }
 }
+
+/* ============================================================
+   LEARNING SECTION
+   ============================================================ */
+
+.learning-section-card {}
+
+.learning-progress-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  margin-right: 0.5rem;
+}
+
+.learning-progress-label {
+  font-size: 0.72rem;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.learning-progress-bar {
+  width: 80px;
+  height: 6px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.learning-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.learning-progress-fill.complete { background: #10b981; }
+.learning-progress-fill.partial  { background: #f59e0b; }
+.learning-progress-fill.low      { background: #7c6bf0; }
+
+/* Overview stats */
+.learning-overview-stats {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.learning-stat-pill {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+  user-select: none;
+}
+.learning-stat-pill b { font-weight: 700; margin-left: 0.2rem; }
+.learning-stat-pill.unseen    { background: rgba(124,107,240,0.12); color: #a78bfa; border-color: rgba(124,107,240,0.25); }
+.learning-stat-pill.review    { background: rgba(245,158,11,0.12); color: #fbbf24; border-color: rgba(245,158,11,0.25); }
+.learning-stat-pill.understood { background: rgba(16,185,129,0.12); color: #34d399; border-color: rgba(16,185,129,0.25); }
+.learning-stat-pill.lf-active { filter: brightness(1.3); border-color: currentColor; }
+
+/* Concept cards list */
+.concept-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.concept-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.concept-card:hover { border-color: rgba(255,255,255,0.13); }
+.concept-card.expanded { border-color: rgba(124,107,240,0.4); }
+.concept-card.status-understood { border-left: 3px solid #10b981; }
+.concept-card.status-review     { border-left: 3px solid #f59e0b; }
+.concept-card.status-asked      { border-left: 3px solid #60a5fa; }
+.concept-card.status-unseen     { border-left: 3px solid rgba(255,255,255,0.15); }
+
+.concept-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tech-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.concept-card-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #e5e7eb;
+  flex: 1;
+  min-width: 0;
+}
+
+.concept-card-badges {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.concept-status-badge,
+.concept-diff-badge {
+  font-size: 0.68rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.concept-status-badge.status-unseen     { background: rgba(124,107,240,0.15); color: #a78bfa; }
+.concept-status-badge.status-asked      { background: rgba(96,165,250,0.15); color: #93c5fd; }
+.concept-status-badge.status-understood { background: rgba(16,185,129,0.15); color: #34d399; }
+.concept-status-badge.status-review     { background: rgba(245,158,11,0.15); color: #fbbf24; }
+
+.diff-beginner     { background: rgba(16,185,129,0.12); color: #6ee7b7; }
+.diff-intermediate { background: rgba(245,158,11,0.12); color: #fcd34d; }
+.diff-advanced     { background: rgba(239,68,68,0.12);  color: #fca5a5; }
+
+.concept-expand-arrow {
+  font-size: 0.7rem;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+/* Concept body */
+.concept-card-body {
+  padding: 0 0.85rem 0.85rem;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+
+.concept-question-panel {
+  background: rgba(124,107,240,0.06);
+  border: 1px solid rgba(124,107,240,0.15);
+  border-radius: 8px;
+  padding: 0.85rem;
+  margin-top: 0.75rem;
+}
+
+.concept-question-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #a78bfa;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+}
+
+.concept-question-text {
+  font-size: 0.875rem;
+  color: #d1d5db;
+  line-height: 1.55;
+  margin-bottom: 0.75rem;
+}
+
+.concept-answer-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 70px;
+  background: rgba(0,0,0,0.2);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: #e5e7eb;
+  font-size: 0.8rem;
+  padding: 0.5rem 0.65rem;
+  resize: vertical;
+  font-family: inherit;
+  margin-bottom: 0.6rem;
+}
+.concept-answer-textarea:focus {
+  outline: none;
+  border-color: rgba(124,107,240,0.5);
+}
+
+.concept-action-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.btn-concept-hint {
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid rgba(245,158,11,0.4);
+  background: rgba(245,158,11,0.1);
+  color: #fbbf24;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-concept-hint:hover { background: rgba(245,158,11,0.2); }
+
+.btn-concept-understood {
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid rgba(16,185,129,0.4);
+  background: rgba(16,185,129,0.1);
+  color: #34d399;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-concept-understood:hover { background: rgba(16,185,129,0.2); }
+
+.btn-concept-review {
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid rgba(245,158,11,0.4);
+  background: rgba(245,158,11,0.08);
+  color: #fbbf24;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-concept-review:hover { background: rgba(245,158,11,0.18); }
+
+.btn-concept-delete {
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(239,68,68,0.25);
+  background: transparent;
+  color: #f87171;
+  font-size: 0.75rem;
+  cursor: pointer;
+  margin-left: auto;
+  transition: all 0.15s;
+}
+.btn-concept-delete:hover { background: rgba(239,68,68,0.12); }
+
+.concept-hint-box {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.2);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: #fcd34d;
+  line-height: 1.5;
+}
+.concept-hint-label {
+  font-weight: 600;
+  margin-right: 0.3rem;
+}
+
+.concept-explanation-toggle {
+  margin-top: 0.75rem;
+  font-size: 0.75rem;
+  color: #6b7280;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+.concept-explanation-toggle:hover { color: #9ca3af; }
+
+.concept-explanation-box {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
+/* Add concept form */
+.concept-add-form {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: rgba(124,107,240,0.06);
+  border: 1px solid rgba(124,107,240,0.2);
+  border-radius: 10px;
+}
+
+.concept-add-form-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #a78bfa;
+  margin-bottom: 0.75rem;
+}
+
+.concept-form-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.concept-form-input {
+  background: rgba(0,0,0,0.2);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: #e5e7eb;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.65rem;
+  flex: 1;
+  font-family: inherit;
+}
+.concept-form-input:focus { outline: none; border-color: rgba(124,107,240,0.4); }
+
+.concept-form-select {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: #e5e7eb;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.5rem;
+  font-family: inherit;
+}
+
+.concept-form-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(0,0,0,0.2);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  color: #e5e7eb;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.65rem;
+  resize: vertical;
+  font-family: inherit;
+  margin-bottom: 0.5rem;
+}
+.concept-form-textarea:focus { outline: none; border-color: rgba(124,107,240,0.4); }
+
+.concept-form-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}

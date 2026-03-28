@@ -676,6 +676,127 @@ module.exports = {
   getProjectsForStaleness
 };
 
+// --- Learning Concepts ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS learning_concepts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    tech_name TEXT NOT NULL,
+    concept_title TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer_hint TEXT,
+    difficulty TEXT DEFAULT 'beginner',
+    status TEXT DEFAULT 'unseen',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_concepts_project ON learning_concepts(project_id);
+`);
+
+// Seed Sown concepts
+const sownConceptCount = db.prepare(`SELECT COUNT(*) as c FROM learning_concepts WHERE project_id = 'sown'`).get();
+if (sownConceptCount.c === 0) {
+  db.prepare(`INSERT INTO learning_concepts (project_id, tech_name, concept_title, explanation, question, answer_hint, difficulty, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'sown', 'SwiftUI', 'Declarative vs Imperative UI',
+    'In SwiftUI, you describe *what* the UI should look like based on state — not *how* to update it step by step. When state changes, SwiftUI figures out the minimum updates needed.',
+    'If you have a habit list and the user marks one as complete, in a declarative UI system you update the data model. But how does the *screen* know to show the checkmark without you explicitly telling it to redraw?',
+    'Think about what "state" means and how the view is a function of that state',
+    'beginner', 0
+  );
+  db.prepare(`INSERT INTO learning_concepts (project_id, tech_name, concept_title, explanation, question, answer_hint, difficulty, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'sown', 'Screen Time API', 'FamilyControls entitlement and DeviceActivityMonitor',
+    "Apple's Screen Time API requires a special entitlement (FamilyControls) that must be approved. It uses DeviceActivityMonitor — a separate extension that runs outside your app — to detect when blocked apps are launched.",
+    'Why does Apple require the app blocking logic to run in a *separate extension* rather than inside the main Sown app?',
+    "Think about what would happen if a blocked app could kill the app that's blocking it",
+    'intermediate', 1
+  );
+  db.prepare(`INSERT INTO learning_concepts (project_id, tech_name, concept_title, explanation, question, answer_hint, difficulty, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'sown', 'Core Data', 'Local persistence and CloudKit sync',
+    'Core Data is a local database on device. Adding CloudKit sync means your data syncs across devices through iCloud — but it introduces eventual consistency: changes may take seconds to propagate.',
+    'You have 2 iPhones both running Sown. The user marks a habit complete on iPhone 1 while offline. Then marks it NOT complete on iPhone 2 while also offline. When both go online, what problem do you have and how might you resolve it?',
+    'This is a classic distributed systems problem. Think about timestamps.',
+    'intermediate', 2
+  );
+}
+
+// Seed DailyTrack concepts
+const dtConceptCount = db.prepare(`SELECT COUNT(*) as c FROM learning_concepts WHERE project_id = 'dailytrack'`).get();
+if (dtConceptCount.c === 0) {
+  db.prepare(`INSERT INTO learning_concepts (project_id, tech_name, concept_title, explanation, question, answer_hint, difficulty, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'dailytrack', 'Spotify API', 'OAuth 2.0 Authorization Flow',
+    "When DailyTrack wants to access a user's Spotify account, it can't ask for their password. OAuth 2.0 lets Spotify issue a temporary access token after the user grants permission — your app never sees the password.",
+    "The Spotify access token expires after 1 hour. Your user opens DailyTrack, the token is expired, and they're in the middle of searching for a song. How do you handle this without making them log in again?",
+    'There are two types of tokens involved...',
+    'beginner', 0
+  );
+  db.prepare(`INSERT INTO learning_concepts (project_id, tech_name, concept_title, explanation, question, answer_hint, difficulty, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'dailytrack', 'Firebase', 'Realtime Database vs Firestore',
+    "Firebase offers two databases: Realtime Database (one big JSON tree, very fast) and Firestore (document/collection model, better querying). DailyTrack's social feed needs to show new shares quickly.",
+    "DailyTrack has 10,000 users. Each user shares 1 song per day. You need to show a user their friends' shares in reverse chronological order, limited to the 20 most recent. Which Firebase database would handle this query better and why?",
+    'Think about what queries each database supports natively',
+    'intermediate', 1
+  );
+}
+
+// Ensure learning sections exist for seeded projects
+const ensureLearningSection = db.prepare(`
+  INSERT OR IGNORE INTO project_sections (project_id, section_type, title, content, sort_order)
+  SELECT @project_id, 'learning', 'Tech Stack Learning', '', 99
+  WHERE NOT EXISTS (SELECT 1 FROM project_sections WHERE project_id = @project_id AND section_type = 'learning')
+`);
+ensureLearningSection.run({ project_id: 'sown' });
+ensureLearningSection.run({ project_id: 'dailytrack' });
+
+const insertConcept = db.prepare(`
+  INSERT INTO learning_concepts (project_id, tech_name, concept_title, explanation, question, answer_hint, difficulty, sort_order)
+  VALUES (@project_id, @tech_name, @concept_title, @explanation, @question, @answer_hint, @difficulty, @sort_order)
+`);
+
+const getConceptsByProject = db.prepare(`
+  SELECT * FROM learning_concepts WHERE project_id = @project_id ORDER BY sort_order ASC, id ASC
+`);
+
+const getConceptById = db.prepare(`SELECT * FROM learning_concepts WHERE id = @id`);
+
+const updateConcept = db.prepare(`
+  UPDATE learning_concepts SET
+    tech_name = COALESCE(@tech_name, tech_name),
+    concept_title = COALESCE(@concept_title, concept_title),
+    explanation = COALESCE(@explanation, explanation),
+    question = COALESCE(@question, question),
+    answer_hint = COALESCE(@answer_hint, answer_hint),
+    difficulty = COALESCE(@difficulty, difficulty),
+    status = COALESCE(@status, status),
+    sort_order = COALESCE(@sort_order, sort_order),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const deleteConcept = db.prepare(`DELETE FROM learning_concepts WHERE id = @id`);
+
+const getLearningStats = db.prepare(`
+  SELECT
+    COUNT(*) as total,
+    SUM(CASE WHEN status = 'understood' THEN 1 ELSE 0 END) as understood,
+    SUM(CASE WHEN status = 'needs_review' THEN 1 ELSE 0 END) as needs_review,
+    SUM(CASE WHEN status = 'asked' THEN 1 ELSE 0 END) as asked,
+    SUM(CASE WHEN status = 'unseen' THEN 1 ELSE 0 END) as unseen,
+    SUM(CASE WHEN difficulty = 'beginner' THEN 1 ELSE 0 END) as beginner,
+    SUM(CASE WHEN difficulty = 'intermediate' THEN 1 ELSE 0 END) as intermediate,
+    SUM(CASE WHEN difficulty = 'advanced' THEN 1 ELSE 0 END) as advanced
+  FROM learning_concepts
+`);
+
+module.exports.insertConcept = insertConcept;
+module.exports.getConceptsByProject = getConceptsByProject;
+module.exports.getConceptById = getConceptById;
+module.exports.updateConcept = updateConcept;
+module.exports.deleteConcept = deleteConcept;
+module.exports.getLearningStats = getLearningStats;
+
 // --- Task Steps ---
 
 db.exec(`
