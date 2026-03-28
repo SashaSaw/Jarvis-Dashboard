@@ -6,7 +6,7 @@
   <title>Jarvis Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=20260328e">
+  <link rel="stylesheet" href="/style.css?v=20260328f">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>">
 </head>
 <body>
@@ -373,6 +373,22 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260328e"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', themeVariables: { darkMode: true, background: '#1a1a2e', primaryColor: '#3b82f6', primaryTextColor: '#e4e4e7', primaryBorderColor: '#4b5563', lineColor: '#6b7280', secondaryColor: '#1e1e2e', tertiaryColor: '#12121a' } });
+  </script>
+
+  <!-- Diagram Fullscreen Modal -->
+  <div class="modal-overlay" id="diagram-fullscreen-modal" onclick="closeDiagramFullscreen(event)">
+    <div class="diagram-fullscreen-inner" onclick="event.stopPropagation()">
+      <div class="diagram-fullscreen-header">
+        <span class="diagram-fullscreen-title" id="diagram-fullscreen-title">App Flow</span>
+        <button class="modal-close" onclick="closeDiagramFullscreen()">&times;</button>
+      </div>
+      <div class="diagram-fullscreen-body" id="diagram-fullscreen-body"></div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=20260328f"></script>
 </body>
 </html>

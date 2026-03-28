@@ -3025,7 +3025,7 @@ const FEATURE_STATUSES = [
 
 const SECTION_ICONS = {
   concept: '💭', tech: '⚙️', marketing: '📣', feedback_intro: '💬',
-  flows: '🔀', kanban: '📋'
+  flows: '🔀', kanban: '📋', app_flow: '📊'
 };
 
 const PROJECT_STATUS_COLORS = {
@@ -3285,9 +3285,13 @@ function renderProjectHub() {
     ${isProduct ? renderProjectSection('feedback_intro', 'User Feedback', getSection('feedback_intro'), p.id) : ''}
     ${isProduct ? renderFeedbackList(p) : ''}
     ${isProduct ? renderProjectSection('marketing', 'Marketing', getSection('marketing'), p.id) : ''}
+    ${renderAppFlowSection(getSection('app_flow'), p.id)}
     ${renderProjectSection('flows', 'App Flows', getSection('flows'), p.id)}
     ${renderProjectSection('tech', 'Tech Stack', getSection('tech'), p.id)}
   `;
+
+  // Run mermaid on any app_flow diagrams
+  renderMermaidInHub();
 
   // Load kanban if board linked
   if (p.trello_board_id) {
@@ -3397,6 +3401,128 @@ function renderProjectHeader(p) {
   `;
 }
 
+function renderAppFlowSection(section, projectId) {
+  const content = section ? section.content : '';
+  const isEmpty = !content || !content.trim();
+  const isCollapsed = projectHubState.collapsedSections['app_flow'] !== undefined
+    ? projectHubState.collapsedSections['app_flow']
+    : isEmpty;
+  const sectionId = section ? section.id : null;
+  const isEditing = projectHubState.editingSection === (sectionId || 'new-app_flow');
+  const starterTemplate = `flowchart TD\n    A[🚀 Launch] --> B{First time?}\n    B -->|Yes| C[Onboarding]\n    B -->|No| D[Home Screen]\n    C --> D\n    D --> E[Main Feature]\n    D --> F[Settings]`;
+
+  return `
+    <div class="project-section-card">
+      <div class="project-section-header" onclick="toggleProjectSection('app_flow')">
+        <span class="project-section-toggle">${isCollapsed ? '▶' : '▼'}</span>
+        <span class="project-section-icon">📊</span>
+        <span class="project-section-title">App Flow Diagram</span>
+        ${!isEmpty && !isEditing ? `<button class="btn-doc-action" onclick="event.stopPropagation(); openDiagramFullscreen()" style="margin-left:auto;margin-right:0.5rem" title="Fullscreen">⛶</button>` : ''}
+        <button class="btn-doc-action" onclick="event.stopPropagation(); editProjectSection('app_flow', ${sectionId ? sectionId : 'null'}, '${projectId}')" ${!isEmpty && !isEditing ? '' : 'style="margin-left:auto"'}>✏️</button>
+      </div>
+      ${!isCollapsed ? `
+        <div class="project-section-body">
+          ${isEditing ? `
+            <div class="app-flow-editor">
+              <div class="app-flow-editor-pane">
+                <div class="app-flow-editor-label">Mermaid code</div>
+                <textarea class="project-section-textarea app-flow-textarea" id="section-edit-app_flow" oninput="debouncedMermaidPreview()">${escapeHtml(content || starterTemplate)}</textarea>
+              </div>
+              <div class="app-flow-editor-pane">
+                <div class="app-flow-editor-label">Preview</div>
+                <div class="app-flow-preview-container" id="app-flow-preview"></div>
+              </div>
+            </div>
+            <div class="project-section-edit-actions">
+              <button class="btn-move" onclick="saveProjectSection('app_flow', ${sectionId ? sectionId : 'null'}, '${projectId}')">Save</button>
+              <button class="btn-archive" onclick="cancelSectionEdit()">Cancel</button>
+            </div>
+          ` : content ? `
+            <div class="app-flow-diagram-container">
+              <div class="mermaid" id="app-flow-diagram-${projectId}">${escapeHtml(content)}</div>
+            </div>
+          ` : `<div class="project-section-empty">No diagram yet. Click ✏️ to add a Mermaid flowchart.</div>`}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+async function renderMermaidInHub() {
+  if (typeof mermaid === 'undefined') return;
+  const nodes = document.querySelectorAll('.mermaid:not([data-processed])');
+  if (!nodes.length) return;
+  try {
+    await mermaid.run({ nodes: Array.from(nodes) });
+  } catch(e) {
+    // Mermaid parse error — show error in place
+    nodes.forEach(n => {
+      if (!n.getAttribute('data-processed')) {
+        n.innerHTML = `<div class="app-flow-error">⚠️ Diagram error: ${escapeHtml(e.message || 'Invalid syntax')}</div>`;
+        n.setAttribute('data-processed', 'true');
+      }
+    });
+  }
+}
+
+let _mermaidPreviewTimer = null;
+function debouncedMermaidPreview() {
+  clearTimeout(_mermaidPreviewTimer);
+  _mermaidPreviewTimer = setTimeout(updateMermaidPreview, 500);
+}
+
+async function updateMermaidPreview() {
+  const ta = document.getElementById('section-edit-app_flow');
+  const preview = document.getElementById('app-flow-preview');
+  if (!ta || !preview || typeof mermaid === 'undefined') return;
+  const code = ta.value.trim();
+  if (!code) { preview.innerHTML = '<div class="project-section-empty">Enter Mermaid code to preview</div>'; return; }
+  try {
+    const id = 'mermaid-preview-' + Date.now();
+    const { svg } = await mermaid.render(id, code);
+    preview.innerHTML = svg;
+  } catch(e) {
+    preview.innerHTML = `<div class="app-flow-error">⚠️ ${escapeHtml(e.message || 'Invalid syntax')}</div>`;
+  }
+}
+
+function openDiagramFullscreen() {
+  const p = projectHubState.projectData;
+  if (!p) return;
+  const section = (p.sections || []).find(s => s.section_type === 'app_flow');
+  if (!section || !section.content) return;
+
+  const modal = document.getElementById('diagram-fullscreen-modal');
+  const title = document.getElementById('diagram-fullscreen-title');
+  const body = document.getElementById('diagram-fullscreen-body');
+  if (!modal || !body) return;
+
+  title.textContent = `${p.icon || '📊'} ${p.name} — App Flow`;
+  body.innerHTML = `<div class="mermaid">${escapeHtml(section.content)}</div>`;
+  modal.style.display = 'flex';
+  document.addEventListener('keydown', _diagramEscListener);
+
+  setTimeout(async () => {
+    try {
+      const nodes = body.querySelectorAll('.mermaid:not([data-processed])');
+      if (nodes.length) await mermaid.run({ nodes: Array.from(nodes) });
+    } catch(e) {
+      body.innerHTML = `<div class="app-flow-error">⚠️ ${escapeHtml(e.message || 'Render error')}</div>`;
+    }
+  }, 50);
+}
+
+function closeDiagramFullscreen(event) {
+  if (event && event.target !== document.getElementById('diagram-fullscreen-modal')) return;
+  const modal = document.getElementById('diagram-fullscreen-modal');
+  if (modal) modal.style.display = 'none';
+  document.removeEventListener('keydown', _diagramEscListener);
+}
+
+function _diagramEscListener(e) {
+  if (e.key === 'Escape') closeDiagramFullscreen();
+}
+
 function renderProjectSection(type, title, section, projectId) {
   const icon = SECTION_ICONS[type] || '📄';
   const content = section ? section.content : '';
@@ -3436,10 +3562,12 @@ function toggleProjectSection(type) {
 }
 
 function editProjectSection(type, sectionId, projectId) {
+  projectHubState.collapsedSections[type] = false;
   projectHubState.editingSection = sectionId || `new-${type}`;
   renderProjectHub();
   const ta = document.getElementById(`section-edit-${type}`);
   if (ta) ta.focus();
+  if (type === 'app_flow') updateMermaidPreview();
 }
 
 function cancelSectionEdit() {
