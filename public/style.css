@@ -197,6 +197,28 @@ body {
   text-align: center;
 }
 
+.nav-badge {
+  margin-left: auto;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.nav-link.active .nav-badge {
+  background: var(--accent);
+  opacity: 0.9;
+}
+
 .sidebar-footer {
   padding: 0.75rem 1rem;
   border-top: 1px solid var(--border);

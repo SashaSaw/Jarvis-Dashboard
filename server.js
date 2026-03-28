@@ -1825,6 +1825,56 @@ app.put('/api/workspace/file', (req, res) => {
   }
 });
 
+// --- Notification Badges ---
+
+const { upsertTabVisit, getTabVisit, db: rawDb } = require('./db');
+
+app.get('/api/notifications/badges', (req, res) => {
+  try {
+    const tabs = ['inbox', 'ideas', 'projects', 'docs', 'kanban', 'schedule', 'log'];
+    const result = {};
+
+    for (const tab of tabs) {
+      const visit = getTabVisit.get({ tab_name: tab });
+      const since = visit ? visit.last_seen_at : '1970-01-01T00:00:00';
+
+      let count = 0;
+      if (tab === 'inbox') {
+        count = rawDb.prepare(`SELECT COUNT(*) as c FROM tasks WHERE status = 'inbox' AND created_at > ?`).get(since).c;
+      } else if (tab === 'ideas') {
+        count = rawDb.prepare(`SELECT COUNT(*) as c FROM ideas WHERE status = 'active' AND created_at > ?`).get(since).c;
+      } else if (tab === 'projects') {
+        count = rawDb.prepare(`SELECT COUNT(*) as c FROM projects WHERE updated_at > ?`).get(since).c;
+      } else if (tab === 'docs') {
+        count = rawDb.prepare(`SELECT COUNT(*) as c FROM documents WHERE created_at > ?`).get(since).c;
+      } else if (tab === 'kanban') {
+        count = rawDb.prepare(`SELECT COUNT(*) as c FROM tasks WHERE status = 'done' AND completed_at > ?`).get(since).c;
+      } else if (tab === 'schedule') {
+        count = rawDb.prepare(`SELECT COUNT(*) as c FROM schedule WHERE created_at > ?`).get(since).c;
+      } else if (tab === 'log') {
+        count = rawDb.prepare(`SELECT COUNT(*) as c FROM action_log WHERE started_at > ?`).get(since).c;
+      }
+      result[tab] = count;
+    }
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/notifications/seen', (req, res) => {
+  try {
+    const { tab } = req.body;
+    const validTabs = ['inbox', 'ideas', 'projects', 'docs', 'kanban', 'schedule', 'log'];
+    if (!tab || !validTabs.includes(tab)) return res.status(400).json({ error: 'invalid tab' });
+    upsertTabVisit.run({ tab_name: tab });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  🐶 Jarvis Dashboard running at http://localhost:${PORT}\n`);
 });

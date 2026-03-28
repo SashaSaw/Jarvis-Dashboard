@@ -14,6 +14,9 @@ let expandedTaskId = null;
 let inboxPriority = 'normal';
 let editingTaskId = null;
 
+// Badge state
+let navBadges = {};
+
 // Schedule/Calendar state
 let calViewMode = 'day'; // day, week, month
 let calSelectedDate = new Date();
@@ -188,9 +191,49 @@ function updateNav() {
   updateMobilePageName();
 }
 
+async function fetchNavBadges() {
+  try {
+    navBadges = await fetchJSON('/api/notifications/badges') || {};
+    renderNavBadges();
+  } catch (e) { /* silent */ }
+}
+
+function renderNavBadges() {
+  document.querySelectorAll('.nav-link[data-view]').forEach(link => {
+    const tab = link.dataset.view;
+    const count = navBadges[tab] || 0;
+    let badge = link.querySelector('.nav-badge');
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'nav-badge';
+        link.appendChild(badge);
+      }
+      badge.textContent = count > 99 ? '99+' : count;
+    } else if (badge) {
+      badge.remove();
+    }
+  });
+}
+
+async function markTabSeen(tab) {
+  const tracked = ['inbox', 'ideas', 'projects', 'docs', 'kanban', 'schedule', 'log'];
+  if (!tracked.includes(tab)) return;
+  try {
+    await fetch('/api/notifications/seen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tab })
+    });
+    navBadges[tab] = 0;
+    renderNavBadges();
+  } catch (e) { /* silent */ }
+}
+
 function route() {
   currentView = getView();
   updateNav();
+  markTabSeen(currentView);
   closeSidebar();
   const main = document.getElementById('main-content');
 
@@ -5019,6 +5062,8 @@ updateTimestamp();
 // Periodic refreshes
 setInterval(periodicRefresh, REFRESH_INTERVAL);
 setInterval(refreshAgentSidebar, AGENT_REFRESH_INTERVAL);
+fetchNavBadges();
+setInterval(fetchNavBadges, 30000);
 
 // ===== FINANCE TAB =====
 

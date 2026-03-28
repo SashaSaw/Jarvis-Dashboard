@@ -761,6 +761,28 @@ try { db.exec(`ALTER TABLE finance_settings ADD COLUMN pay_day INTEGER DEFAULT 2
 
 module.exports.financeDb = db;
 
+// --- Tab Visits (notification badges) ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tab_visits (
+    tab_name TEXT PRIMARY KEY,
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
+const upsertTabVisit = db.prepare(`
+  INSERT INTO tab_visits (tab_name, last_seen_at)
+  VALUES (@tab_name, datetime('now'))
+  ON CONFLICT(tab_name) DO UPDATE SET last_seen_at = datetime('now')
+`);
+
+const getTabVisit = db.prepare(`
+  SELECT last_seen_at FROM tab_visits WHERE tab_name = @tab_name
+`);
+
+module.exports.upsertTabVisit = upsertTabVisit;
+module.exports.getTabVisit = getTabVisit;
+
 // Chat messages table
 db.exec(`
   CREATE TABLE IF NOT EXISTS chat_messages (
