@@ -4999,39 +4999,88 @@ async function newDocument() {
 
 // ===== VIEW: ACTIVITY LOG =====
 
+const LOG_AGENT_COLORS = {
+  jarvis: 'var(--accent)',
+  klaus: '#60a5fa',
+  emily: '#f472b6',
+  system: 'var(--text-muted)'
+};
+const LOG_AGENT_ICONS = { jarvis: '🐶', klaus: '⚡', emily: '📧', system: '⚙️' };
+
 let logAutoRefreshTimer = null;
-let logFilterAgent = '';
-let logFilterSearch = '';
+let logFilters = { agent: '', action: '', search: '', date_from: '', date_to: '' };
+let logOffset = 0;
+let logTotal = 0;
+let logCurrentEntries = [];
+let logSearchDebounce = null;
+const LOG_PAGE_SIZE = 100;
 
 async function renderLog(container) {
-  // Clear any existing auto-refresh
   if (logAutoRefreshTimer) clearInterval(logAutoRefreshTimer);
+  logOffset = 0;
+  logCurrentEntries = [];
 
   container.innerHTML = `
     <div class="view-container">
       <div class="view-header">
         <h2 class="view-title">📜 Activity Log</h2>
-        <button class="btn-refresh" onclick="refreshLogData()" title="Refresh">↻</button>
+        <button class="btn-refresh" onclick="refreshLogData(true)" title="Refresh">↻</button>
       </div>
+
       <div class="log-filters">
-        <select class="log-filter-select" id="log-filter-agent" onchange="logFilterAgent=this.value;refreshLogData()">
+        <select class="log-filter-select" id="lf-agent" onchange="logFilters.agent=this.value;logOffset=0;logCurrentEntries=[];refreshLogData(true)">
           <option value="">All Agents</option>
           <option value="jarvis">🐶 Jarvis</option>
           <option value="klaus">⚡ Klaus</option>
           <option value="emily">📧 Emily</option>
+          <option value="system">⚙️ System</option>
         </select>
-        <input type="text" class="log-filter-search" id="log-filter-search" placeholder="Search actions..." oninput="logFilterSearch=this.value;refreshLogData()">
+        <input type="text" class="log-filter-input" id="lf-action" placeholder="Action type..." oninput="logDebounceFilter('action', this.value)">
+        <input type="date" class="log-filter-input log-filter-date" id="lf-date-from" oninput="logFilters.date_from=this.value;logOffset=0;logCurrentEntries=[];refreshLogData(true)">
+        <input type="date" class="log-filter-input log-filter-date" id="lf-date-to" oninput="logFilters.date_to=this.value;logOffset=0;logCurrentEntries=[];refreshLogData(true)">
+        <input type="text" class="log-filter-search" id="lf-search" placeholder="Search..." oninput="logDebounceFilter('search', this.value)">
+        <button class="log-filter-clear" onclick="logClearFilters()" title="Clear filters">✕</button>
       </div>
-      <div class="log-stats-row" id="log-stats"></div>
+
+      <div class="log-summary-row" id="log-summary"></div>
+      <div class="log-chart-section" id="log-chart"></div>
+
       <div class="log-entries" id="log-entries">
         <div class="loading"><div class="spinner"></div> Loading...</div>
       </div>
+      <div id="log-load-more-wrap" style="display:none;text-align:center;padding:1rem 0">
+        <button class="btn-secondary" onclick="logLoadMore()">Load more</button>
+      </div>
     </div>
   `;
-  refreshLogData();
+
+  await Promise.all([refreshLogData(true), renderLogChart()]);
+
   logAutoRefreshTimer = setInterval(() => {
-    if (currentView === 'log') refreshLogData();
+    if (currentView === 'log') refreshLogData(false);
   }, 30000);
+}
+
+function logDebounceFilter(key, value) {
+  clearTimeout(logSearchDebounce);
+  logSearchDebounce = setTimeout(() => {
+    logFilters[key] = value;
+    logOffset = 0;
+    logCurrentEntries = [];
+    refreshLogData(true);
+  }, 300);
+}
+
+function logClearFilters() {
+  logFilters = { agent: '', action: '', search: '', date_from: '', date_to: '' };
+  logOffset = 0;
+  logCurrentEntries = [];
+  document.getElementById('lf-agent').value = '';
+  document.getElementById('lf-action').value = '';
+  document.getElementById('lf-search').value = '';
+  document.getElementById('lf-date-from').value = '';
+  document.getElementById('lf-date-to').value = '';
+  refreshLogData(true);
 }
 
 function getDateGroup(dateStr) {
@@ -5061,94 +5110,180 @@ function logStatusBadge(status) {
 }
 
 function logAgentBadge(agent) {
-  const isJarvis = agent.toLowerCase() === 'jarvis';
-  const icon = isJarvis ? '🐶' : '⚡';
-  const cls = isJarvis ? 'log-agent-jarvis' : 'log-agent-klaus';
+  const a = (agent || 'system').toLowerCase();
+  const icon = LOG_AGENT_ICONS[a] || '🤖';
+  const clsMap = { jarvis: 'log-agent-jarvis', klaus: 'log-agent-klaus', emily: 'log-agent-emily', system: 'log-agent-system' };
+  const cls = clsMap[a] || 'log-agent-system';
   return `<span class="log-agent-badge ${cls}">${icon} ${agent}</span>`;
 }
 
-async function refreshLogData() {
+function logActionTag(action) {
+  const a = (action || '').toLowerCase();
+  let cls = 'log-action-default';
+  if (/task_complete|deploy/.test(a)) cls = 'log-action-green';
+  else if (/task_start|build/.test(a)) cls = 'log-action-blue';
+  else if (/error|fail/.test(a)) cls = 'log-action-red';
+  else if (/^create_|^add_/.test(a)) cls = 'log-action-teal';
+  else if (/^update_|^move_/.test(a)) cls = 'log-action-orange';
+  return `<span class="log-action-tag ${cls}">${escapeHtml(action)}</span>`;
+}
+
+async function refreshLogData(reset = false) {
   if (currentView !== 'log') return;
+  if (reset) { logOffset = 0; logCurrentEntries = []; }
 
   const params = new URLSearchParams();
-  if (logFilterAgent) params.set('agent', logFilterAgent);
-  params.set('limit', '200');
+  if (logFilters.agent) params.set('agent', logFilters.agent);
+  if (logFilters.action) params.set('action', logFilters.action);
+  if (logFilters.search) params.set('search', logFilters.search);
+  if (logFilters.date_from) params.set('date_from', logFilters.date_from);
+  if (logFilters.date_to) params.set('date_to', logFilters.date_to);
+  params.set('limit', LOG_PAGE_SIZE);
+  params.set('offset', logOffset);
 
-  const [entries, stats] = await Promise.all([
+  const [data, stats] = await Promise.all([
     fetchJSON(`/api/log?${params}`),
     fetchJSON('/api/log/stats')
   ]);
 
   if (currentView !== 'log') return;
 
-  // Render stats
-  const statsEl = document.getElementById('log-stats');
-  if (statsEl && stats) {
-    const agents = stats.agents || [];
-    statsEl.innerHTML = agents.map(a => `
-      <div class="log-stat-card">
-        <span class="log-stat-agent">${a.agent === 'jarvis' ? '🐶' : '⚡'} ${a.agent}</span>
-        <span class="log-stat-value">${a.today} today</span>
-        <span class="log-stat-sub">${a.total} total · avg ${formatDuration(a.avg_duration_ms)}</span>
+  const entries = (data && data.entries) || [];
+  logTotal = (data && data.total) || 0;
+  logCurrentEntries = reset ? entries : [...logCurrentEntries, ...entries];
+
+  // Summary row
+  const summaryEl = document.getElementById('log-summary');
+  if (summaryEl && stats) {
+    const mostActiveAgent = (stats.agents || []).reduce((a, b) => (b.total > (a ? a.total : 0) ? b : a), null);
+    const mostCommonAction = (stats.per_action || [])[0];
+    summaryEl.innerHTML = `
+      <div class="log-summary-card">
+        <div class="log-summary-val">${(stats.total_count || 0).toLocaleString()}</div>
+        <div class="log-summary-label">Total Entries</div>
       </div>
-    `).join('');
+      <div class="log-summary-card">
+        <div class="log-summary-val">${(stats.today_count || 0)}</div>
+        <div class="log-summary-label">Today</div>
+      </div>
+      <div class="log-summary-card">
+        <div class="log-summary-val">${mostActiveAgent ? `${LOG_AGENT_ICONS[mostActiveAgent.agent] || '🤖'} ${mostActiveAgent.agent}` : '—'}</div>
+        <div class="log-summary-label">Most Active Agent</div>
+      </div>
+      <div class="log-summary-card">
+        <div class="log-summary-val" style="font-size:0.85rem">${mostCommonAction ? escapeHtml(mostCommonAction.action) : '—'}</div>
+        <div class="log-summary-label">Top Action</div>
+      </div>
+    `;
   }
 
-  // Render entries
+  renderLogEntries();
+}
+
+async function logLoadMore() {
+  logOffset += LOG_PAGE_SIZE;
+  await refreshLogData(false);
+}
+
+function renderLogEntries() {
   const el = document.getElementById('log-entries');
   if (!el) return;
 
-  let filtered = entries || [];
-  if (logFilterSearch) {
-    const q = logFilterSearch.toLowerCase();
-    filtered = filtered.filter(e =>
-      (e.action && e.action.toLowerCase().includes(q)) ||
-      (e.description && e.description.toLowerCase().includes(q)) ||
-      (e.reason && e.reason.toLowerCase().includes(q))
-    );
-  }
-
-  if (filtered.length === 0) {
+  if (logCurrentEntries.length === 0) {
     el.innerHTML = `
       <div class="docs-empty-state" style="padding:3rem;text-align:center">
         <div class="placeholder-icon">📜</div>
         <div class="placeholder-text">No log entries</div>
-        <div class="placeholder-sub">Activity will appear here as Jarvis and Klaus take actions</div>
+        <div class="placeholder-sub">Activity will appear here as agents take actions</div>
       </div>
     `;
+    const wrap = document.getElementById('log-load-more-wrap');
+    if (wrap) wrap.style.display = 'none';
     return;
   }
 
   // Group by date
   const groups = {};
-  filtered.forEach(e => {
+  const groupOrder = [];
+  logCurrentEntries.forEach(e => {
     const group = getDateGroup(e.started_at);
-    if (!groups[group]) groups[group] = [];
+    if (!groups[group]) { groups[group] = []; groupOrder.push(group); }
     groups[group].push(e);
   });
 
   let html = '';
-  for (const [group, items] of Object.entries(groups)) {
+  for (const group of groupOrder) {
+    const items = groups[group];
     html += `<div class="log-date-group"><div class="log-date-label">${group}</div>`;
-    html += items.map((e, i) => `
-      <div class="log-entry ${i % 2 === 0 ? 'log-entry-even' : ''}">
-        <div class="log-entry-agent">${logAgentBadge(e.agent)}</div>
-        <div class="log-entry-content">
-          <div class="log-entry-action">${escapeHtml(e.action)}</div>
-          ${e.description ? `<div class="log-entry-desc">${escapeHtml(e.description)}</div>` : ''}
-          ${e.reason ? `<div class="log-entry-reason">↳ ${escapeHtml(e.reason)}</div>` : ''}
+    html += items.map(e => {
+      const agentKey = (e.agent || 'system').toLowerCase();
+      const borderColor = LOG_AGENT_COLORS[agentKey] || 'var(--text-muted)';
+      return `
+        <div class="log-entry" style="border-left:3px solid ${borderColor}">
+          <div class="log-entry-agent">${logAgentBadge(e.agent)}</div>
+          <div class="log-entry-content">
+            ${logActionTag(e.action)}
+            ${e.description ? `<div class="log-entry-desc">${escapeHtml(e.description)}</div>` : ''}
+            ${e.reason ? `<div class="log-entry-reason">↳ ${escapeHtml(e.reason)}</div>` : ''}
+          </div>
+          <div class="log-entry-meta">
+            ${logStatusBadge(e.status || 'completed')}
+            <span class="log-entry-time">${formatTime(e.started_at)}</span>
+            <span class="log-entry-duration">${formatDuration(e.duration_ms)}</span>
+          </div>
         </div>
-        <div class="log-entry-meta">
-          ${logStatusBadge(e.status || 'completed')}
-          <span class="log-entry-time">${formatTime(e.started_at)}</span>
-          <span class="log-entry-duration">${formatDuration(e.duration_ms)}</span>
-        </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
     html += '</div>';
   }
 
   el.innerHTML = html;
+
+  const wrap = document.getElementById('log-load-more-wrap');
+  if (wrap) {
+    wrap.style.display = logCurrentEntries.length < logTotal ? 'block' : 'none';
+  }
+}
+
+async function renderLogChart() {
+  const chartEl = document.getElementById('log-chart');
+  if (!chartEl) return;
+
+  const stats = await fetchJSON('/api/log/stats');
+  if (!stats || currentView !== 'log') return;
+
+  const agents = stats.agents || [];
+  if (agents.length === 0) { chartEl.style.display = 'none'; return; }
+
+  const maxVal = Math.max(...agents.map(a => a.total), 1);
+  const barW = 60;
+  const barGap = 20;
+  const chartH = 80;
+  const svgW = agents.length * (barW + barGap) + barGap;
+
+  const colorMap = { jarvis: 'var(--accent)', klaus: '#60a5fa', emily: '#f472b6', system: '#6b7280' };
+
+  const bars = agents.map((a, i) => {
+    const h = Math.max(4, Math.round((a.total / maxVal) * chartH));
+    const x = barGap + i * (barW + barGap);
+    const y = chartH - h;
+    const color = colorMap[a.agent] || '#6b7280';
+    const icon = LOG_AGENT_ICONS[a.agent] || '🤖';
+    return `
+      <rect x="${x}" y="${y}" width="${barW}" height="${h}" fill="${color}" rx="4" opacity="0.85"/>
+      <text x="${x + barW / 2}" y="${chartH + 14}" text-anchor="middle" font-size="11" fill="var(--text-secondary)">${icon} ${a.agent}</text>
+      <text x="${x + barW / 2}" y="${y - 4}" text-anchor="middle" font-size="10" fill="var(--text-muted)">${a.total}</text>
+    `;
+  }).join('');
+
+  chartEl.innerHTML = `
+    <div class="log-chart-wrap">
+      <div class="log-chart-title">Agent Activity</div>
+      <svg viewBox="0 0 ${svgW} ${chartH + 30}" width="${svgW}" height="${chartH + 30}" class="log-chart-svg">
+        ${bars}
+      </svg>
+    </div>
+  `;
 }
 
 // ===== VIEW: AGENT PROFILE =====

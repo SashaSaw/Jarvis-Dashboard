@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, getLogTotalCount, getLogTodayCount, getLogDailyActivity, getLogTopActionsAll, logDb, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -575,16 +575,33 @@ app.post('/api/log', (req, res) => {
 
 app.get('/api/log', (req, res) => {
   try {
-    const { agent, since, limit } = req.query;
-    const entries = getLogEntries.all({
-      agent: agent || null,
-      since: since || null,
-      limit: parseInt(limit) || 100
-    });
+    const { agent, action, project, search, date_from, date_to, limit, offset } = req.query;
+    const maxLimit = Math.min(parseInt(limit) || 100, 500);
+    const off = parseInt(offset) || 0;
+
+    const conditions = [];
+    const params = [];
+
+    if (agent) { conditions.push('agent = ?'); params.push(agent); }
+    if (action) { conditions.push('action LIKE ?'); params.push(`%${action}%`); }
+    if (project) { conditions.push('description LIKE ?'); params.push(`%${project}%`); }
+    if (search) { conditions.push('(description LIKE ? OR action LIKE ? OR reason LIKE ?)'); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+    if (date_from) { conditions.push('date(started_at) >= ?'); params.push(date_from); }
+    if (date_to) { conditions.push('date(started_at) <= ?'); params.push(date_to); }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const sql = `SELECT * FROM action_log ${where} ORDER BY started_at DESC LIMIT ? OFFSET ?`;
+    params.push(maxLimit, off);
+
+    const entries = logDb.prepare(sql).all(...params);
     for (const e of entries) {
       if (e.metadata) try { e.metadata = JSON.parse(e.metadata); } catch {}
     }
-    res.json(entries);
+
+    const countSql = `SELECT COUNT(*) as total FROM action_log ${where}`;
+    const { total } = logDb.prepare(countSql).get(...params.slice(0, params.length - 2));
+
+    res.json({ entries, total, offset: off, limit: maxLimit });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -593,8 +610,23 @@ app.get('/api/log', (req, res) => {
 app.get('/api/log/stats', (req, res) => {
   try {
     const agentStats = getLogStats.all();
-    const topActions = getLogTopActions.all();
-    res.json({ agents: agentStats, topActions });
+    const topActions = getLogTopActionsAll.all();
+    const dailyActivity = getLogDailyActivity.all();
+    const { count: totalCount } = getLogTotalCount.get();
+    const { count: todayCount } = getLogTodayCount.get();
+
+    // Build per_agent map
+    const per_agent = {};
+    for (const a of agentStats) per_agent[a.agent] = { total: a.total, today: a.today, avg_duration_ms: a.avg_duration_ms };
+
+    res.json({
+      agents: agentStats,
+      per_agent,
+      per_action: topActions,
+      daily_activity: dailyActivity,
+      total_count: totalCount,
+      today_count: todayCount
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

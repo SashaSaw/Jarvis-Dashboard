@@ -2392,6 +2392,125 @@ body {
   min-width: 45px;
 }
 
+/* ===== LOG ENHANCEMENTS ===== */
+
+/* Agent badge additions */
+.log-agent-emily {
+  background: rgba(244, 114, 182, 0.15);
+  color: #f472b6;
+}
+.log-agent-system {
+  background: rgba(107, 114, 128, 0.15);
+  color: var(--text-muted);
+}
+
+/* Filter bar */
+.log-filter-input {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-family: var(--font-sans);
+  min-width: 130px;
+}
+.log-filter-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.log-filter-input::placeholder { color: var(--text-muted); }
+
+.log-filter-date {
+  min-width: 120px;
+  color-scheme: dark;
+}
+
+.log-filter-clear {
+  padding: 0.5rem 0.7rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.log-filter-clear:hover { color: var(--text-primary); border-color: var(--text-muted); }
+
+/* Summary row */
+.log-summary-row {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+.log-summary-card {
+  flex: 1;
+  min-width: 120px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+}
+.log-summary-val {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  line-height: 1.2;
+}
+.log-summary-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 0.2rem;
+}
+
+/* Action tags */
+.log-action-tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: 0.15rem 0.5rem;
+  border-radius: 5px;
+  margin-bottom: 0.15rem;
+}
+.log-action-green  { background: var(--green-dim); color: var(--green); }
+.log-action-blue   { background: var(--blue-dim); color: var(--blue); }
+.log-action-red    { background: var(--red-dim); color: var(--red); }
+.log-action-teal   { background: rgba(20, 184, 166, 0.15); color: #2dd4bf; }
+.log-action-orange { background: rgba(249, 115, 22, 0.15); color: #fb923c; }
+.log-action-default{ background: rgba(107, 114, 128, 0.15); color: var(--text-secondary); }
+
+/* Entry: use border-left from inline style; remove alternating even */
+.log-entry {
+  padding-left: 0.85rem;
+}
+
+/* Chart section */
+.log-chart-section {
+  margin-bottom: 1.5rem;
+}
+.log-chart-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  display: inline-block;
+}
+.log-chart-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+.log-chart-svg { display: block; overflow: visible; }
+
 /* ===== CALENDAR / SCHEDULE VIEW ===== */
 
 /* Controls Bar */
@@ -3454,6 +3573,7 @@ body {
     flex-direction: column;
     gap: 0.5rem;
   }
+  .log-filter-input, .log-filter-date { min-width: unset; width: 100%; }
 
   .log-stats-row {
     flex-wrap: wrap;
@@ -3463,6 +3583,9 @@ body {
     min-width: 120px;
     flex: 1;
   }
+
+  .log-summary-row { flex-wrap: wrap; }
+  .log-summary-card { min-width: 100px; flex: 1; }
 
   /* Docs layout: already stacks */
   .docs-viewer {

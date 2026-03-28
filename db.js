@@ -386,6 +386,32 @@ const getLogTopActions = db.prepare(`
   LIMIT 10
 `);
 
+const getLogTotalCount = db.prepare(`SELECT COUNT(*) as count FROM action_log`);
+
+const getLogTodayCount = db.prepare(`
+  SELECT COUNT(*) as count FROM action_log WHERE started_at >= date('now')
+`);
+
+const getLogDailyActivity = db.prepare(`
+  SELECT date(started_at) as date, COUNT(*) as count
+  FROM action_log
+  WHERE started_at >= date('now', '-30 days')
+  GROUP BY date(started_at)
+  ORDER BY date ASC
+`);
+
+const getLogTopActionsAll = db.prepare(`
+  SELECT action, COUNT(*) as count
+  FROM action_log
+  GROUP BY action
+  ORDER BY count DESC
+  LIMIT 10
+`);
+
+// Dynamic log query — built in server.js using db.prepare() at request time
+// Expose db for dynamic queries
+const logDb = db;
+
 // --- Projects ---
 
 const insertProject = db.prepare(`
@@ -604,6 +630,11 @@ module.exports = {
   getLogEntries,
   getLogStats,
   getLogTopActions,
+  getLogTotalCount,
+  getLogTodayCount,
+  getLogDailyActivity,
+  getLogTopActionsAll,
+  logDb,
   // Project Hub
   insertProject,
   getProjects,
