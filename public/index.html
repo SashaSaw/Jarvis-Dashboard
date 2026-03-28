@@ -6,7 +6,7 @@
   <title>Jarvis Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=20260328a">
+  <link rel="stylesheet" href="/style.css?v=20260328b">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>">
 </head>
 <body>
@@ -60,6 +60,9 @@
       <nav class="sidebar-nav">
         <a class="nav-link" href="#home" data-view="home">
           <span class="nav-icon">🏠</span> Home
+        </a>
+        <a class="nav-link" href="#goals" data-view="goals">
+          <span class="nav-icon">🎯</span> Goals
         </a>
         <a class="nav-link" href="#schedule" data-view="schedule">
           <span class="nav-icon">🗓️</span> Schedule
@@ -255,6 +258,65 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260328a"></script>
+  <!-- Set Goals Modal -->
+  <div class="modal-overlay" id="goals-modal" onclick="closeGoalsModal(event)">
+    <div class="modal goals-modal-inner" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="goals-modal-title">Set Today's Goals</h3>
+        <button class="modal-close" onclick="closeGoalsModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label>Date</label>
+          <input type="date" id="goals-modal-date" class="modal-input">
+        </div>
+        <div id="goals-modal-inputs">
+          <div class="modal-field goal-input-row">
+            <label>Goal 1</label>
+            <input type="text" class="modal-input goal-title-input" placeholder="e.g. Ship the auth feature" autofocus>
+          </div>
+          <div class="modal-field goal-input-row">
+            <label>Goal 2</label>
+            <input type="text" class="modal-input goal-title-input" placeholder="e.g. Review pull requests">
+          </div>
+          <div class="modal-field goal-input-row">
+            <label>Goal 3</label>
+            <input type="text" class="modal-input goal-title-input" placeholder="e.g. Write blog post outline">
+          </div>
+        </div>
+        <button class="btn-ghost" style="margin-top:0.5rem;font-size:0.8rem" onclick="addGoalInput()">+ Add another goal</button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="submitGoalsModal()">Save Goals</button>
+        <button class="btn-archive" onclick="closeGoalsModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Step Modal -->
+  <div class="modal-overlay" id="step-modal" onclick="closeStepModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="step-modal-title">Add Steps</h3>
+        <button class="modal-close" onclick="closeStepModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="step-modal-goal-name" style="font-weight:600;margin-bottom:1rem;color:var(--text-primary)"></div>
+        <div id="step-inputs">
+          <div class="modal-field step-input-row">
+            <input type="text" class="modal-input step-title-input" placeholder="Step title..." autofocus>
+            <input type="number" class="modal-input step-mins-input" placeholder="mins" style="width:80px;margin-top:0.25rem">
+          </div>
+        </div>
+        <button class="btn-ghost" style="margin-top:0.5rem;font-size:0.8rem" onclick="addStepInput()">+ Add step</button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="submitStepModal()">Save Steps</button>
+        <button class="btn-archive" onclick="closeStepModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=20260328b"></script>
 </body>
 </html>

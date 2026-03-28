@@ -633,6 +633,96 @@ module.exports = {
   getProjectsForStaleness
 };
 
+// --- Goals ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_goals_date ON goals(date);
+
+  CREATE TABLE IF NOT EXISTS goal_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'pending',
+    sort_order INTEGER DEFAULT 0,
+    estimated_minutes INTEGER,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (goal_id) REFERENCES goals(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_goal_steps_goal ON goal_steps(goal_id);
+`);
+
+const insertGoal = db.prepare(`
+  INSERT INTO goals (date, title, status, sort_order)
+  VALUES (@date, @title, @status, @sort_order)
+`);
+
+const getGoalsByDate = db.prepare(`
+  SELECT * FROM goals WHERE date = @date ORDER BY sort_order ASC, id ASC
+`);
+
+const getGoalById = db.prepare(`SELECT * FROM goals WHERE id = @id`);
+
+const updateGoal = db.prepare(`
+  UPDATE goals SET
+    title = COALESCE(@title, title),
+    status = COALESCE(@status, status),
+    sort_order = COALESCE(@sort_order, sort_order),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const deleteGoal = db.prepare(`DELETE FROM goals WHERE id = @id`);
+
+const insertGoalStep = db.prepare(`
+  INSERT INTO goal_steps (goal_id, title, description, status, sort_order, estimated_minutes)
+  VALUES (@goal_id, @title, @description, @status, @sort_order, @estimated_minutes)
+`);
+
+const getStepsByGoal = db.prepare(`
+  SELECT * FROM goal_steps WHERE goal_id = @goal_id ORDER BY sort_order ASC, id ASC
+`);
+
+const updateGoalStep = db.prepare(`
+  UPDATE goal_steps SET
+    title = COALESCE(@title, title),
+    description = COALESCE(@description, description),
+    status = COALESCE(@status, status),
+    sort_order = COALESCE(@sort_order, sort_order),
+    estimated_minutes = COALESCE(@estimated_minutes, estimated_minutes),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const deleteGoalStep = db.prepare(`DELETE FROM goal_steps WHERE id = @id`);
+const deleteStepsByGoal = db.prepare(`DELETE FROM goal_steps WHERE goal_id = @goal_id`);
+
+const getGoalsAfter = db.prepare(`
+  SELECT COUNT(*) as c FROM goals WHERE created_at > @since
+`);
+
+module.exports.insertGoal = insertGoal;
+module.exports.getGoalsByDate = getGoalsByDate;
+module.exports.getGoalById = getGoalById;
+module.exports.updateGoal = updateGoal;
+module.exports.deleteGoal = deleteGoal;
+module.exports.insertGoalStep = insertGoalStep;
+module.exports.getStepsByGoal = getStepsByGoal;
+module.exports.updateGoalStep = updateGoalStep;
+module.exports.deleteGoalStep = deleteGoalStep;
+module.exports.deleteStepsByGoal = deleteStepsByGoal;
+module.exports.getGoalsAfter = getGoalsAfter;
+
 // --- Ideas ---
 
 db.exec(`

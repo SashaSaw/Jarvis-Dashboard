@@ -250,6 +250,7 @@ function route() {
 
   switch (currentView) {
     case 'home': renderHome(main); break;
+    case 'goals': renderGoals(main); break;
     case 'schedule': renderSchedule(main); break;
     case 'inbox': renderInbox(main); break;
     case 'kanban': renderKanban(main); break;
@@ -370,15 +371,16 @@ async function renderHome(container) {
       </div>
 
       <div class="home-body">
-        <!-- 3. Goals placeholder -->
+        <!-- 3. Goals Widget -->
         <section class="home-section home-goals-section">
           <div class="home-section-header">
             <span class="home-section-title">🎯 Today's Goals</span>
+            <div style="display:flex;gap:0.5rem;align-items:center">
+              <span class="home-section-badge" id="home-goals-badge" style="display:none"></span>
+              <button class="btn-ghost home-goals-set-btn" onclick="openGoalsModal()">+ Set Goals</button>
+            </div>
           </div>
-          <div class="home-goals-placeholder">
-            <span class="placeholder-text">No goals set for today.</span>
-            <button class="btn-ghost" disabled title="Coming in Sprint 2">+ Set Goals</button>
-          </div>
+          <div id="home-goals-list" class="home-loading">Loading…</div>
         </section>
 
         <!-- 4. Alerts -->
@@ -542,6 +544,7 @@ async function refreshHomeData() {
     if (projEl) projEl.textContent = `${homeData.stats.projects_active} projects`;
     if (taskEl) taskEl.textContent = `${homeData.stats.tasks_in_progress + homeData.stats.tasks_todo} tasks`;
 
+    renderHomeGoals(homeData.goals);
     renderHomeAlerts(homeData.alerts);
     renderHomeSchedule(homeData.schedule);
     renderHomeTasks(homeData.tasks);
@@ -655,6 +658,413 @@ function renderHomeProjects(projects) {
       </div>
     </div>
   `).join('');
+}
+
+// ===== GOALS HOME WIDGET =====
+
+function renderHomeGoals(goals) {
+  const el = document.getElementById('home-goals-list');
+  const badge = document.getElementById('home-goals-badge');
+  if (!el) return;
+
+  if (!goals || goals.length === 0) {
+    el.className = '';
+    el.innerHTML = `
+      <div class="goals-empty-cta">
+        <span class="goals-empty-icon">🎯</span>
+        <span class="goals-empty-text">Set your 3 goals for today</span>
+        <button class="btn-ghost" onclick="openGoalsModal()">+ Set Goals</button>
+      </div>`;
+    if (badge) badge.style.display = 'none';
+    return;
+  }
+
+  const completed = goals.filter(g => g.status === 'completed').length;
+  if (badge) {
+    badge.style.display = completed === goals.length ? 'inline' : 'none';
+    badge.textContent = `${completed}/${goals.length} done`;
+    badge.className = 'home-section-badge' + (completed === goals.length ? ' badge-green' : '');
+  }
+
+  el.className = 'home-goals-list';
+  el.innerHTML = goals.map(g => {
+    const totalSteps = g.steps.length;
+    const doneSteps = g.steps.filter(s => s.status === 'done' || s.status === 'skipped').length;
+    const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : (g.status === 'completed' ? 100 : 0);
+    const statusClass = g.status === 'completed' ? 'completed' : g.status === 'active' ? 'active' : '';
+
+    return `
+    <div class="home-goal-card ${statusClass}" id="home-goal-${g.id}">
+      <div class="home-goal-header" onclick="toggleHomeGoal(${g.id})">
+        <div class="home-goal-title-row">
+          <span class="home-goal-status-dot ${g.status}"></span>
+          <span class="home-goal-title ${g.status === 'completed' ? 'done' : ''}">${escapeHtml(g.title)}</span>
+          ${totalSteps > 0 ? `<span class="home-goal-step-count">${doneSteps}/${totalSteps}</span>` : ''}
+        </div>
+        <div class="home-goal-progress-bar"><div class="home-goal-progress-fill" style="width:${pct}%"></div></div>
+      </div>
+      ${totalSteps > 0 ? `
+        <div class="home-goal-steps" id="home-goal-steps-${g.id}" style="display:none">
+          ${g.steps.map(s => `
+            <label class="home-step-row ${s.status === 'done' ? 'done' : ''}">
+              <input type="checkbox" class="home-step-check" ${s.status === 'done' ? 'checked' : ''}
+                onchange="toggleStep(${g.id}, ${s.id}, this.checked)">
+              <span class="home-step-title">${escapeHtml(s.title)}</span>
+              ${s.estimated_minutes ? `<span class="home-step-mins">${s.estimated_minutes}m</span>` : ''}
+            </label>
+          `).join('')}
+        </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function toggleHomeGoal(goalId) {
+  const steps = document.getElementById(`home-goal-steps-${goalId}`);
+  if (!steps) return;
+  steps.style.display = steps.style.display === 'none' ? 'block' : 'none';
+}
+
+async function toggleStep(goalId, stepId, checked) {
+  const status = checked ? 'done' : 'pending';
+  await fetch(`/api/goals/${goalId}/steps/${stepId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  // Refresh goals widget
+  const homeData = await fetchJSON('/api/home');
+  if (homeData) renderHomeGoals(homeData.goals);
+}
+
+// ===== GOALS MODAL =====
+
+let goalsModalDate = null;
+
+function openGoalsModal(date) {
+  const modal = document.getElementById('goals-modal');
+  const dateInput = document.getElementById('goals-modal-date');
+  const today = new Date().toISOString().slice(0, 10);
+  goalsModalDate = date || today;
+  if (dateInput) dateInput.value = goalsModalDate;
+  document.getElementById('goals-modal-title').textContent = goalsModalDate === today ? "Set Today's Goals" : `Set Goals for ${goalsModalDate}`;
+  // Reset inputs to 3 blank
+  const container = document.getElementById('goals-modal-inputs');
+  container.innerHTML = [1,2,3].map((n, i) => `
+    <div class="modal-field goal-input-row">
+      <label>Goal ${n}</label>
+      <input type="text" class="modal-input goal-title-input" placeholder="${['e.g. Ship the auth feature','e.g. Review pull requests','e.g. Write blog post outline'][i] || ''}">
+    </div>`).join('');
+  modal.classList.add('active');
+  modal.querySelector('.goal-title-input').focus();
+}
+
+function closeGoalsModal(e) {
+  if (e && e.target !== document.getElementById('goals-modal')) return;
+  document.getElementById('goals-modal').classList.remove('active');
+}
+
+function addGoalInput() {
+  const container = document.getElementById('goals-modal-inputs');
+  const n = container.querySelectorAll('.goal-input-row').length + 1;
+  const div = document.createElement('div');
+  div.className = 'modal-field goal-input-row';
+  div.innerHTML = `<label>Goal ${n}</label><input type="text" class="modal-input goal-title-input" placeholder="Another goal...">`;
+  container.appendChild(div);
+  div.querySelector('input').focus();
+}
+
+async function submitGoalsModal() {
+  const date = document.getElementById('goals-modal-date').value;
+  const inputs = document.querySelectorAll('.goal-title-input');
+  const titles = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+  if (titles.length === 0) return;
+
+  await fetch('/api/goals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date, goals: titles.map(t => ({ title: t })) })
+  });
+
+  document.getElementById('goals-modal').classList.remove('active');
+
+  // Refresh relevant view
+  if (currentView === 'home') {
+    const homeData = await fetchJSON('/api/home');
+    if (homeData) renderHomeGoals(homeData.goals);
+  } else if (currentView === 'goals') {
+    renderGoals(document.getElementById('main-content'));
+  }
+}
+
+// ===== STEP MODAL =====
+
+let stepModalGoalId = null;
+
+function openStepModal(goalId, goalTitle) {
+  stepModalGoalId = goalId;
+  document.getElementById('step-modal-title').textContent = 'Add Steps';
+  document.getElementById('step-modal-goal-name').textContent = goalTitle;
+  const container = document.getElementById('step-inputs');
+  container.innerHTML = `
+    <div class="modal-field step-input-row">
+      <input type="text" class="modal-input step-title-input" placeholder="Step title..." autofocus>
+      <input type="number" class="modal-input step-mins-input" placeholder="mins" style="width:80px;margin-top:0.25rem">
+    </div>`;
+  document.getElementById('step-modal').classList.add('active');
+  container.querySelector('.step-title-input').focus();
+}
+
+function closeStepModal(e) {
+  if (e && e.target !== document.getElementById('step-modal')) return;
+  document.getElementById('step-modal').classList.remove('active');
+}
+
+function addStepInput() {
+  const container = document.getElementById('step-inputs');
+  const div = document.createElement('div');
+  div.className = 'modal-field step-input-row';
+  div.innerHTML = `<input type="text" class="modal-input step-title-input" placeholder="Step title..."><input type="number" class="modal-input step-mins-input" placeholder="mins" style="width:80px;margin-top:0.25rem">`;
+  container.appendChild(div);
+  div.querySelector('input').focus();
+}
+
+async function submitStepModal() {
+  const rows = document.querySelectorAll('#step-inputs .step-input-row');
+  const steps = Array.from(rows).map(r => ({
+    title: r.querySelector('.step-title-input').value.trim(),
+    estimated_minutes: parseInt(r.querySelector('.step-mins-input').value) || null
+  })).filter(s => s.title);
+
+  if (steps.length === 0) return;
+
+  await fetch(`/api/goals/${stepModalGoalId}/steps`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ steps })
+  });
+
+  document.getElementById('step-modal').classList.remove('active');
+  if (currentView === 'goals') renderGoals(document.getElementById('main-content'));
+}
+
+// ===== GOALS PAGE =====
+
+async function renderGoals(container) {
+  const today = new Date().toISOString().slice(0, 10);
+
+  container.innerHTML = `
+    <div class="view-container goals-view">
+      <div class="view-header">
+        <h1 class="view-title">🎯 Goals</h1>
+        <div class="view-header-actions">
+          <button class="btn-primary" onclick="openGoalsModal()">+ Set Goals</button>
+          <button class="btn-ghost" onclick="carryForwardGoals()" title="Move yesterday's incomplete goals to today">↩ Carry Forward</button>
+        </div>
+      </div>
+
+      <div class="goals-toolbar">
+        <div class="goals-date-nav">
+          <button class="btn-icon" onclick="goalsNavDate(-1)">◀</button>
+          <input type="date" id="goals-date-picker" class="modal-input" value="${today}" style="width:160px" onchange="loadGoalsForDate(this.value)">
+          <button class="btn-icon" onclick="goalsNavDate(1)">▶</button>
+          <button class="btn-ghost" onclick="loadGoalsForDate('${today}')">Today</button>
+        </div>
+        <div id="goals-summary-bar"></div>
+      </div>
+
+      <div id="goals-page-list" class="goals-page-list">
+        <div class="home-loading">Loading…</div>
+      </div>
+
+      <div class="goals-history-section">
+        <div class="home-section-header" style="margin-bottom:0.75rem">
+          <span class="home-section-title">📅 Recent History</span>
+        </div>
+        <div id="goals-history-list" class="goals-history-list">
+          <div class="home-loading">Loading…</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  await loadGoalsForDate(today);
+  await loadGoalsHistory();
+}
+
+let goalsCurrentDate = new Date().toISOString().slice(0, 10);
+
+function goalsNavDate(delta) {
+  const d = new Date(goalsCurrentDate);
+  d.setDate(d.getDate() + delta);
+  const newDate = d.toISOString().slice(0, 10);
+  document.getElementById('goals-date-picker').value = newDate;
+  loadGoalsForDate(newDate);
+}
+
+async function loadGoalsForDate(date) {
+  goalsCurrentDate = date;
+  const el = document.getElementById('goals-page-list');
+  const summaryEl = document.getElementById('goals-summary-bar');
+  if (!el) return;
+  el.innerHTML = '<div class="home-loading">Loading…</div>';
+
+  const goals = await fetchJSON(`/api/goals?date=${date}`);
+  if (!goals) { el.innerHTML = '<div class="home-empty">Error loading goals.</div>'; return; }
+
+  if (summaryEl) {
+    if (goals.length > 0) {
+      const done = goals.filter(g => g.status === 'completed').length;
+      const pct = Math.round((done / goals.length) * 100);
+      summaryEl.innerHTML = `<span class="goals-summary-pill">${done}/${goals.length} complete &mdash; ${pct}%</span>`;
+    } else {
+      summaryEl.innerHTML = '';
+    }
+  }
+
+  if (goals.length === 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    el.innerHTML = `
+      <div class="goals-empty-cta">
+        <span class="goals-empty-icon">🎯</span>
+        <span class="goals-empty-text">${date === today ? 'No goals set for today.' : 'No goals on this date.'}</span>
+        ${date === today ? `<button class="btn-ghost" onclick="openGoalsModal('${date}')">+ Set Goals</button>` : ''}
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = goals.map(g => renderGoalCard(g)).join('');
+}
+
+function renderGoalCard(g) {
+  const totalSteps = g.steps.length;
+  const doneSteps = g.steps.filter(s => s.status === 'done' || s.status === 'skipped').length;
+  const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : (g.status === 'completed' ? 100 : 0);
+
+  const statusColors = { pending: 'var(--text-muted)', active: 'var(--yellow)', completed: 'var(--green)', carried_forward: 'var(--blue)' };
+  const statusColor = statusColors[g.status] || 'var(--text-muted)';
+
+  return `
+  <div class="goal-card" id="goal-card-${g.id}">
+    <div class="goal-card-header">
+      <div class="goal-card-title-row">
+        <span class="goal-status-dot" style="background:${statusColor}" title="${g.status}"></span>
+        <span class="goal-card-title ${g.status === 'completed' ? 'done' : ''}">${escapeHtml(g.title)}</span>
+        <span class="goal-status-badge ${g.status}">${g.status.replace('_', ' ')}</span>
+      </div>
+      <div class="goal-card-actions">
+        <button class="btn-icon" title="Add steps" onclick="openStepModal(${g.id}, '${escapeHtml(g.title).replace(/'/g, "\\'")}')">+ Steps</button>
+        <button class="btn-icon" title="Mark complete" onclick="markGoalDone(${g.id})" ${g.status === 'completed' ? 'disabled' : ''}>✓</button>
+        <button class="btn-icon danger" title="Delete goal" onclick="deleteGoal(${g.id})">🗑</button>
+      </div>
+    </div>
+
+    <div class="goal-progress-row">
+      <div class="goal-progress-bar-track"><div class="goal-progress-bar-fill" style="width:${pct}%"></div></div>
+      <span class="goal-progress-pct">${pct}%</span>
+    </div>
+
+    ${g.steps.length > 0 ? `
+    <div class="goal-steps-list" id="goal-steps-${g.id}">
+      ${g.steps.map(s => `
+        <div class="goal-step-row ${s.status === 'done' ? 'done' : ''}" id="goal-step-row-${s.id}">
+          <label class="goal-step-label">
+            <input type="checkbox" class="goal-step-check" ${s.status === 'done' ? 'checked' : ''}
+              onchange="toggleGoalStep(${g.id}, ${s.id}, this.checked, '${goalsCurrentDate}')">
+            <span class="goal-step-title">${escapeHtml(s.title)}</span>
+            ${s.estimated_minutes ? `<span class="goal-step-mins">${s.estimated_minutes}m</span>` : ''}
+          </label>
+          <button class="btn-icon danger small" onclick="deleteStep(${g.id}, ${s.id}, '${goalsCurrentDate}')">×</button>
+        </div>`).join('')}
+    </div>` : `<div class="goal-no-steps"><button class="btn-ghost small" onclick="openStepModal(${g.id}, '${escapeHtml(g.title).replace(/'/g, "\\'")}')">+ Add steps</button></div>`}
+  </div>`;
+}
+
+async function markGoalDone(goalId) {
+  await fetch(`/api/goals/${goalId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'completed' })
+  });
+  await loadGoalsForDate(goalsCurrentDate);
+}
+
+async function deleteGoal(goalId) {
+  if (!confirm('Delete this goal and all its steps?')) return;
+  await fetch(`/api/goals/${goalId}`, { method: 'DELETE' });
+  await loadGoalsForDate(goalsCurrentDate);
+}
+
+async function toggleGoalStep(goalId, stepId, checked, date) {
+  const status = checked ? 'done' : 'pending';
+  await fetch(`/api/goals/${goalId}/steps/${stepId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  await loadGoalsForDate(date || goalsCurrentDate);
+}
+
+async function deleteStep(goalId, stepId, date) {
+  await fetch(`/api/goals/${goalId}/steps/${stepId}`, { method: 'DELETE' });
+  await loadGoalsForDate(date || goalsCurrentDate);
+}
+
+async function carryForwardGoals() {
+  const res = await fetch('/api/goals/carry-forward', { method: 'POST' });
+  const data = await res.json();
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('goals-date-picker').value = today;
+  await loadGoalsForDate(today);
+  if (data.carried > 0) {
+    showToast(`Carried forward ${data.carried} goal${data.carried !== 1 ? 's' : ''} to today`);
+  } else {
+    showToast('No incomplete goals to carry forward');
+  }
+}
+
+async function loadGoalsHistory() {
+  const el = document.getElementById('goals-history-list');
+  if (!el) return;
+
+  // Load last 7 days
+  const dates = [];
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(Date.now() - i * 86400000);
+    dates.push(d.toISOString().slice(0, 10));
+  }
+
+  const results = await Promise.all(dates.map(d => fetchJSON(`/api/goals?date=${d}`)));
+
+  const rows = dates.map((d, i) => {
+    const goals = results[i] || [];
+    if (goals.length === 0) return null;
+    const done = goals.filter(g => g.status === 'completed').length;
+    const pct = Math.round((done / goals.length) * 100);
+    const barColor = pct === 100 ? 'var(--green)' : pct >= 50 ? 'var(--yellow)' : 'var(--red)';
+    return `
+      <div class="goals-history-row" onclick="loadGoalsForDate('${d}');document.getElementById('goals-date-picker').value='${d}'">
+        <span class="goals-history-date">${d}</span>
+        <div class="goals-history-bar-track"><div class="goals-history-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>
+        <span class="goals-history-pct">${done}/${goals.length}</span>
+      </div>`;
+  }).filter(Boolean);
+
+  el.innerHTML = rows.length > 0 ? rows.join('') : '<div class="home-empty">No goal history yet.</div>';
+}
+
+// ===== TOAST HELPER =====
+
+function showToast(msg, duration = 3000) {
+  let toast = document.getElementById('global-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'global-toast';
+    toast.className = 'global-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), duration);
 }
 
 function renderStats(stats) {

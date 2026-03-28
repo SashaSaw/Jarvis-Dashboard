@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -937,6 +937,168 @@ app.post('/api/alerts/:id/dismiss', (req, res) => {
   }
 });
 
+// --- Goals API ---
+
+app.post('/api/goals', (req, res) => {
+  try {
+    const { date, title, goals } = req.body;
+    if (!date) return res.status(400).json({ error: 'date required' });
+
+    const created = [];
+    if (Array.isArray(goals)) {
+      goals.forEach((g, i) => {
+        const r = insertGoal.run({ date, title: g.title, status: 'pending', sort_order: i });
+        created.push(getGoalById.get({ id: r.lastInsertRowid }));
+      });
+    } else if (title) {
+      const existing = getGoalsByDate.all({ date });
+      const r = insertGoal.run({ date, title, status: 'pending', sort_order: existing.length });
+      created.push(getGoalById.get({ id: r.lastInsertRowid }));
+    } else {
+      return res.status(400).json({ error: 'title or goals array required' });
+    }
+    res.json(created);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/goals', (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: 'date query param required' });
+    const rawGoals = getGoalsByDate.all({ date });
+    const goals = rawGoals.map(g => ({ ...g, steps: getStepsByGoal.all({ goal_id: g.id }) }));
+    res.json(goals);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/goals/:id', (req, res) => {
+  try {
+    const goal = getGoalById.get({ id: req.params.id });
+    if (!goal) return res.status(404).json({ error: 'not found' });
+    const steps = getStepsByGoal.all({ goal_id: goal.id });
+    res.json({ ...goal, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/goals/:id', (req, res) => {
+  try {
+    const goal = getGoalById.get({ id: req.params.id });
+    if (!goal) return res.status(404).json({ error: 'not found' });
+    const { title, status, sort_order } = req.body;
+    updateGoal.run({ id: req.params.id, title: title || null, status: status || null, sort_order: sort_order != null ? sort_order : null });
+    const updated = getGoalById.get({ id: req.params.id });
+    const steps = getStepsByGoal.all({ goal_id: updated.id });
+    res.json({ ...updated, steps });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/goals/:id', (req, res) => {
+  try {
+    const goal = getGoalById.get({ id: req.params.id });
+    if (!goal) return res.status(404).json({ error: 'not found' });
+    deleteStepsByGoal.run({ goal_id: goal.id });
+    deleteGoal.run({ id: goal.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/goals/:id/steps', (req, res) => {
+  try {
+    const goal = getGoalById.get({ id: req.params.id });
+    if (!goal) return res.status(404).json({ error: 'goal not found' });
+    const { steps } = req.body;
+    if (!Array.isArray(steps)) return res.status(400).json({ error: 'steps array required' });
+    const existing = getStepsByGoal.all({ goal_id: goal.id });
+    const created = [];
+    steps.forEach((s, i) => {
+      const r = insertGoalStep.run({
+        goal_id: goal.id,
+        title: s.title,
+        description: s.description || null,
+        status: 'pending',
+        sort_order: existing.length + i,
+        estimated_minutes: s.estimated_minutes || null
+      });
+      created.push({ id: r.lastInsertRowid, ...s, goal_id: goal.id, status: 'pending' });
+    });
+    res.json(created);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/goals/:id/steps/:stepId', (req, res) => {
+  try {
+    const { title, description, status, sort_order, estimated_minutes } = req.body;
+    updateGoalStep.run({
+      id: req.params.stepId,
+      title: title || null,
+      description: description !== undefined ? description : null,
+      status: status || null,
+      sort_order: sort_order != null ? sort_order : null,
+      estimated_minutes: estimated_minutes || null
+    });
+    // Auto-update goal status based on steps
+    const allSteps = getStepsByGoal.all({ goal_id: req.params.id });
+    if (allSteps.length > 0) {
+      const allDone = allSteps.every(s => s.status === 'done' || s.status === 'skipped');
+      const anyActive = allSteps.some(s => s.status === 'in_progress');
+      const anyDone = allSteps.some(s => s.status === 'done');
+      const newStatus = allDone ? 'completed' : anyActive ? 'active' : anyDone ? 'active' : 'pending';
+      updateGoal.run({ id: req.params.id, title: null, status: newStatus, sort_order: null });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/goals/:id/steps/:stepId', (req, res) => {
+  try {
+    deleteGoalStep.run({ id: req.params.stepId });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/goals/carry-forward', (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const yesterdayGoals = getGoalsByDate.all({ date: yesterday });
+    const todayGoals = getGoalsByDate.all({ date: today });
+    const carried = [];
+
+    for (const g of yesterdayGoals) {
+      if (g.status === 'completed') continue;
+      const steps = getStepsByGoal.all({ goal_id: g.id });
+      const r = insertGoal.run({ date: today, title: g.title, status: 'pending', sort_order: todayGoals.length + carried.length });
+      const newGoalId = r.lastInsertRowid;
+      const pendingSteps = steps.filter(s => s.status !== 'done' && s.status !== 'skipped');
+      pendingSteps.forEach((s, i) => {
+        insertGoalStep.run({ goal_id: newGoalId, title: s.title, description: s.description, status: 'pending', sort_order: i, estimated_minutes: s.estimated_minutes });
+      });
+      updateGoal.run({ id: g.id, title: null, status: 'carried_forward', sort_order: null });
+      carried.push({ ...getGoalById.get({ id: newGoalId }), steps: getStepsByGoal.all({ goal_id: newGoalId }) });
+    }
+
+    res.json({ carried: carried.length, goals: carried });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Home API ---
 
 app.get('/api/home', async (req, res) => {
@@ -989,8 +1151,15 @@ app.get('/api/home', async (req, res) => {
       alerts_count: alerts.length
     };
 
+    // Today's goals with steps
+    const rawGoals = getGoalsByDate.all({ date: today });
+    const goals = rawGoals.map(g => {
+      const steps = getStepsByGoal.all({ goal_id: g.id });
+      return { ...g, steps };
+    });
+
     res.json({
-      goals: [],
+      goals,
       schedule,
       agents,
       alerts,
@@ -1831,7 +2000,7 @@ const { upsertTabVisit, getTabVisit, db: rawDb } = require('./db');
 
 app.get('/api/notifications/badges', (req, res) => {
   try {
-    const tabs = ['inbox', 'ideas', 'projects', 'docs', 'kanban', 'schedule', 'log'];
+    const tabs = ['inbox', 'ideas', 'projects', 'docs', 'kanban', 'schedule', 'log', 'goals'];
     const result = {};
 
     for (const tab of tabs) {
@@ -1853,6 +2022,8 @@ app.get('/api/notifications/badges', (req, res) => {
         count = rawDb.prepare(`SELECT COUNT(*) as c FROM schedule WHERE created_at > ?`).get(since).c;
       } else if (tab === 'log') {
         count = rawDb.prepare(`SELECT COUNT(*) as c FROM action_log WHERE started_at > ?`).get(since).c;
+      } else if (tab === 'goals') {
+        count = rawDb.prepare(`SELECT COUNT(*) as c FROM goals WHERE created_at > ?`).get(since).c;
       }
       result[tab] = count;
     }
@@ -1866,7 +2037,7 @@ app.get('/api/notifications/badges', (req, res) => {
 app.post('/api/notifications/seen', (req, res) => {
   try {
     const { tab } = req.body;
-    const validTabs = ['inbox', 'ideas', 'projects', 'docs', 'kanban', 'schedule', 'log'];
+    const validTabs = ['inbox', 'ideas', 'projects', 'docs', 'kanban', 'schedule', 'log', 'goals'];
     if (!tab || !validTabs.includes(tab)) return res.status(400).json({ error: 'invalid tab' });
     upsertTabVisit.run({ tab_name: tab });
     res.json({ ok: true });
