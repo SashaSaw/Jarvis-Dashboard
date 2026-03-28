@@ -161,6 +161,7 @@ const VIEW_NAMES = {
   inbox: 'Inbox',
   kanban: 'Kanban',
   projects: 'Projects',
+  pipeline: 'Pipeline',
   ideas: 'Ideas',
   workspace: 'Workspace',
   docs: 'Docs',
@@ -256,6 +257,7 @@ function route() {
     case 'inbox': renderInbox(main); break;
     case 'kanban': renderKanban(main); break;
     case 'projects': renderProjects(main); break;
+    case 'pipeline': renderPipeline(main); break;
     case 'ideas': renderIdeas(main); break;
     case 'workspace': renderWorkspace(main); break;
     case 'docs': renderDocs(main); break;
@@ -442,7 +444,16 @@ async function renderHome(container) {
           <div id="home-schedule-list" class="home-loading">Loading…</div>
         </section>
 
-        <!-- 7. Projects Grid -->
+        <!-- 7. Pipeline Summary -->
+        <section class="home-section" id="home-pipeline-section">
+          <div class="home-section-header">
+            <span class="home-section-title">🚀 Project Pipeline</span>
+            <button class="btn-ghost" style="font-size:0.75rem" onclick="navigate('pipeline')">View Pipeline →</button>
+          </div>
+          <div id="home-pipeline-summary" class="home-loading">Loading…</div>
+        </section>
+
+        <!-- 8. Projects Grid -->
         <section class="home-section" id="home-projects-section">
           <div class="home-section-header">
             <span class="home-section-title">📁 Projects</span>
@@ -553,6 +564,7 @@ async function refreshHomeData() {
     renderHomeSchedule(homeData.schedule);
     renderHomeTasks(homeData.tasks);
     renderHomeProjects(homeData.projects);
+    renderHomePipeline();
   }
 
   if (usageSummary) {
@@ -671,6 +683,32 @@ function renderHomeProjects(projects) {
       </div>
     </div>
   `).join('');
+}
+
+async function renderHomePipeline() {
+  const el = document.getElementById('home-pipeline-summary');
+  if (!el) return;
+  const data = await fetchJSON('/api/pipeline');
+  if (!data) { el.innerHTML = '<div class="home-empty">Could not load pipeline.</div>'; return; }
+  const stages = [
+    { key: 'idea', icon: '💡', label: 'Ideas' },
+    { key: 'evaluating', icon: '🔍', label: 'Evaluating' },
+    { key: 'defined', icon: '📐', label: 'Defined' },
+    { key: 'building', icon: '🔨', label: 'Building' },
+    { key: 'shipped', icon: '🚀', label: 'Shipped' }
+  ];
+  el.innerHTML = `
+    <div class="pipeline-summary-row">
+      ${stages.map(s => {
+        const count = (data.projects[s.key] || []).length;
+        return `<div class="pipeline-summary-pill" onclick="navigate('pipeline')" title="Go to Pipeline">
+          <span class="ps-icon">${s.icon}</span>
+          <span class="ps-label">${s.label}</span>
+          <span class="ps-count ${count > 0 ? 'has-items' : ''}">${count}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
 }
 
 // ===== GOALS HOME WIDGET =====
@@ -3983,6 +4021,272 @@ function renderMarkdown(md) {
   html = html.replace(/(<\/(?:h[1-4]|ul|ol|pre|hr)>)\s*<\/p>/g, '$1');
 
   return html;
+}
+
+// ==================== PIPELINE ====================
+
+const PIPELINE_STAGES = [
+  { key: 'idea',       label: 'Ideas',      icon: '💡', color: '#a855f7' },
+  { key: 'evaluating', label: 'Evaluating', icon: '🔍', color: '#3b82f6' },
+  { key: 'defined',    label: 'Defined',    icon: '📐', color: '#14b8a6' },
+  { key: 'building',   label: 'Building',   icon: '🔨', color: '#f97316' },
+  { key: 'shipped',    label: 'Shipped',    icon: '🚀', color: '#22c55e' }
+];
+
+let pipelineData = null;
+let evalModalProjectId = null;
+let dragSrcStage = null;
+let dragSrcProjectId = null;
+
+async function renderPipeline(container) {
+  container.innerHTML = `
+    <div class="view-container pipeline-view">
+      <div class="pipeline-header">
+        <h2 class="pipeline-title">🚀 Project Pipeline</h2>
+        <div class="pipeline-subtitle">Drag projects between stages to track progress</div>
+      </div>
+      <!-- Mobile: stage tabs -->
+      <div class="pipeline-mobile-tabs" id="pipeline-mobile-tabs"></div>
+      <div class="pipeline-board" id="pipeline-board">
+        <div class="loading"><div class="spinner"></div> Loading pipeline...</div>
+      </div>
+    </div>
+  `;
+  await loadPipelineData();
+}
+
+async function loadPipelineData() {
+  pipelineData = await fetchJSON('/api/pipeline');
+  if (!pipelineData) return;
+  renderPipelineBoard();
+}
+
+function renderPipelineBoard() {
+  const board = document.getElementById('pipeline-board');
+  if (!board || !pipelineData) return;
+
+  board.innerHTML = PIPELINE_STAGES.map(stage => {
+    const projects = pipelineData.projects[stage.key] || [];
+    return `
+      <div class="pipeline-column" data-stage="${stage.key}"
+           ondragover="pipelineDragOver(event)" ondrop="pipelineDrop(event, '${stage.key}')"
+           ondragleave="pipelineDragLeave(event)">
+        <div class="pipeline-col-header" style="border-top: 3px solid ${stage.color}">
+          <span class="pipeline-col-icon">${stage.icon}</span>
+          <span class="pipeline-col-label">${stage.label}</span>
+          <span class="pipeline-col-count" style="background:${stage.color}22;color:${stage.color}">${projects.length}</span>
+        </div>
+        <div class="pipeline-col-cards" id="pipeline-col-${stage.key}">
+          ${projects.map(p => renderPipelineCard(p, stage.key)).join('')}
+          ${projects.length === 0 ? `<div class="pipeline-empty-drop">Drop here</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Mobile tabs
+  const tabsEl = document.getElementById('pipeline-mobile-tabs');
+  if (tabsEl) {
+    const activeMobileStage = tabsEl.dataset.active || PIPELINE_STAGES[0].key;
+    tabsEl.innerHTML = PIPELINE_STAGES.map(s =>
+      `<button class="pipeline-tab-btn ${s.key === activeMobileStage ? 'active' : ''}" style="--stage-color:${s.color}" onclick="switchPipelineMobileTab('${s.key}')">${s.icon} ${s.label} <span>${(pipelineData.projects[s.key] || []).length}</span></button>`
+    ).join('');
+    applyPipelineMobileTab(activeMobileStage);
+  }
+}
+
+function switchPipelineMobileTab(stageKey) {
+  const tabsEl = document.getElementById('pipeline-mobile-tabs');
+  if (tabsEl) tabsEl.dataset.active = stageKey;
+  renderPipelineBoard();
+  applyPipelineMobileTab(stageKey);
+}
+
+function applyPipelineMobileTab(stageKey) {
+  document.querySelectorAll('.pipeline-column').forEach(col => {
+    col.style.display = window.innerWidth <= 768
+      ? (col.dataset.stage === stageKey ? 'flex' : 'none')
+      : 'flex';
+  });
+}
+
+function renderPipelineCard(p, stageKey) {
+  const hasEval = p.market_score !== null && p.market_score !== undefined;
+  const score = hasEval
+    ? (p.market_score * 2 + p.excitement_score * 2 + p.synergy_score - p.effort_score)
+    : null;
+  const daysSince = p.last_activity_at
+    ? Math.floor((Date.now() - new Date(p.last_activity_at).getTime()) / 86400000)
+    : 999;
+  const stale = daysSince >= 5 ? 'stale-red' : daysSince >= 3 ? 'stale-amber' : '';
+  const canEval = stageKey === 'idea' || stageKey === 'evaluating';
+
+  return `
+    <div class="pipeline-card ${stale}" draggable="true"
+         data-project-id="${p.id}" data-stage="${stageKey}"
+         ondragstart="pipelineDragStart(event, '${p.id}', '${stageKey}')"
+         ondragend="pipelineDragEnd(event)"
+         onclick="pipelineCardClick('${p.id}', '${stageKey}')">
+      <div class="pipeline-card-top">
+        <span class="pipeline-card-icon">${p.icon || '📁'}</span>
+        <div class="pipeline-card-info">
+          <div class="pipeline-card-name">${escapeHtml(p.name)}</div>
+          ${p.tagline ? `<div class="pipeline-card-tagline">${escapeHtml(p.tagline)}</div>` : ''}
+        </div>
+        ${score !== null ? `<span class="pipeline-score-badge" title="Eval score">${score}</span>` : ''}
+      </div>
+      <div class="pipeline-card-footer">
+        <span class="pipeline-card-activity">${timeAgo(p.last_activity_at || p.updated_at)}</span>
+        ${canEval ? `<button class="pipeline-eval-btn" onclick="event.stopPropagation();openEvalModal('${p.id}', '${escapeHtml(p.name)}')" title="Evaluate">📊</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function pipelineCardClick(projectId, stageKey) {
+  if (stageKey === 'idea' || stageKey === 'evaluating') {
+    openEvalModal(projectId, pipelineData?.projects[stageKey]?.find(p => p.id === projectId)?.name || projectId);
+  } else {
+    navigate('projects');
+  }
+}
+
+// --- Drag & Drop ---
+
+function pipelineDragStart(event, projectId, stageKey) {
+  dragSrcProjectId = projectId;
+  dragSrcStage = stageKey;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', projectId);
+  event.currentTarget.classList.add('dragging');
+}
+
+function pipelineDragEnd(event) {
+  event.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.pipeline-column').forEach(col => col.classList.remove('drag-over'));
+}
+
+function pipelineDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  const col = event.currentTarget;
+  document.querySelectorAll('.pipeline-column').forEach(c => c.classList.remove('drag-over'));
+  col.classList.add('drag-over');
+}
+
+function pipelineDragLeave(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) {
+    event.currentTarget.classList.remove('drag-over');
+  }
+}
+
+async function pipelineDrop(event, targetStage) {
+  event.preventDefault();
+  const col = event.currentTarget;
+  col.classList.remove('drag-over');
+  if (!dragSrcProjectId || dragSrcStage === targetStage) return;
+
+  const projectId = dragSrcProjectId;
+  const fromStage = dragSrcStage;
+  dragSrcProjectId = null;
+  dragSrcStage = null;
+
+  // Optimistic update
+  if (pipelineData) {
+    const src = pipelineData.projects[fromStage] || [];
+    const proj = src.find(p => p.id === projectId);
+    if (proj) {
+      pipelineData.projects[fromStage] = src.filter(p => p.id !== projectId);
+      proj.pipeline_stage = targetStage;
+      if (!pipelineData.projects[targetStage]) pipelineData.projects[targetStage] = [];
+      pipelineData.projects[targetStage].push(proj);
+      renderPipelineBoard();
+    }
+  }
+
+  const result = await fetchJSON(`/api/projects/${projectId}/pipeline`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pipeline_stage: targetStage })
+  });
+
+  if (!result?.ok) {
+    // Revert on failure
+    await loadPipelineData();
+  }
+}
+
+// --- Evaluation Scorecard Modal ---
+
+function calcEvalTotal() {
+  const m = parseInt(document.getElementById('eval-market')?.value || 3);
+  const e = parseInt(document.getElementById('eval-effort')?.value || 3);
+  const x = parseInt(document.getElementById('eval-excitement')?.value || 3);
+  const s = parseInt(document.getElementById('eval-synergy')?.value || 3);
+  // Weighted: market×2 + excitement×2 + synergy - effort
+  return m * 2 + x * 2 + s - e;
+}
+
+function updateEvalScore(field) {
+  const val = document.getElementById(`eval-${field}`)?.value;
+  const valEl = document.getElementById(`eval-${field}-val`);
+  if (valEl) valEl.textContent = val;
+  const totalEl = document.getElementById('eval-total-score');
+  if (totalEl) totalEl.textContent = calcEvalTotal();
+}
+
+async function openEvalModal(projectId, projectName) {
+  evalModalProjectId = projectId;
+  const titleEl = document.getElementById('eval-modal-title');
+  if (titleEl) titleEl.textContent = `Evaluate: ${projectName}`;
+
+  // Load existing evaluation
+  const ev = await fetchJSON(`/api/projects/${projectId}/evaluate`);
+  if (ev) {
+    const fields = ['market', 'effort', 'excitement', 'synergy'];
+    fields.forEach(f => {
+      const el = document.getElementById(`eval-${f}`);
+      const valEl = document.getElementById(`eval-${f}-val`);
+      const score = ev[`${f}_score`] || 3;
+      if (el) el.value = score;
+      if (valEl) valEl.textContent = score;
+    });
+    const notesEl = document.getElementById('eval-notes');
+    if (notesEl) notesEl.value = ev.notes || '';
+  }
+
+  const totalEl = document.getElementById('eval-total-score');
+  if (totalEl) totalEl.textContent = calcEvalTotal();
+
+  document.getElementById('eval-modal').style.display = 'flex';
+}
+
+function closeEvalModal(event) {
+  if (event && event.target !== document.getElementById('eval-modal')) return;
+  document.getElementById('eval-modal').style.display = 'none';
+  evalModalProjectId = null;
+}
+
+async function saveEvaluation() {
+  if (!evalModalProjectId) return;
+  const market_score = parseInt(document.getElementById('eval-market').value);
+  const effort_score = parseInt(document.getElementById('eval-effort').value);
+  const excitement_score = parseInt(document.getElementById('eval-excitement').value);
+  const synergy_score = parseInt(document.getElementById('eval-synergy').value);
+  const notes = document.getElementById('eval-notes').value;
+
+  const result = await fetchJSON(`/api/projects/${evalModalProjectId}/evaluate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ market_score, effort_score, excitement_score, synergy_score, notes })
+  });
+
+  if (result) {
+    document.getElementById('eval-modal').style.display = 'none';
+    evalModalProjectId = null;
+    // Refresh pipeline
+    if (currentView === 'pipeline') await loadPipelineData();
+  }
 }
 
 // ==================== IDEAS ====================

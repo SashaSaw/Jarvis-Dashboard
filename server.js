@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -2253,6 +2253,69 @@ app.get('/api/usage/summary', (req, res) => {
       top_models: topModels,
       top_agents: topAgents
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Pipeline API ---
+
+const PIPELINE_STAGES = ['idea', 'evaluating', 'defined', 'building', 'shipped'];
+
+app.get('/api/pipeline', (req, res) => {
+  try {
+    const projects = getPipelineProjects.all();
+    const grouped = {};
+    for (const stage of PIPELINE_STAGES) grouped[stage] = [];
+    for (const p of projects) {
+      const stage = PIPELINE_STAGES.includes(p.pipeline_stage) ? p.pipeline_stage : 'idea';
+      grouped[stage].push(p);
+    }
+    res.json({ stages: PIPELINE_STAGES, projects: grouped });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/projects/:id/pipeline', (req, res) => {
+  try {
+    const { pipeline_stage } = req.body;
+    if (!PIPELINE_STAGES.includes(pipeline_stage)) {
+      return res.status(400).json({ error: `Invalid stage. Must be one of: ${PIPELINE_STAGES.join(', ')}` });
+    }
+    updateProjectPipelineStage.run({ id: req.params.id, pipeline_stage });
+    // Sync status field with pipeline stage
+    if (pipeline_stage === 'building') {
+      try { updateProject.run({ id: req.params.id, name: null, tagline: null, icon: null, status: 'active', platform: null, tech_stack: null, current_version: null, next_version: null, release_date: null, category: null, app_store_url: null, github_url: null, landing_url: null, trello_board_id: null, project_type: null }); } catch(e) {}
+    }
+    res.json({ ok: true, pipeline_stage });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/projects/:id/evaluate', (req, res) => {
+  try {
+    const evaluation = getEvaluationByProject.get({ project_id: req.params.id });
+    res.json(evaluation || { project_id: req.params.id, market_score: 3, effort_score: 3, excitement_score: 3, synergy_score: 3, notes: '' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:id/evaluate', (req, res) => {
+  try {
+    const { market_score, effort_score, excitement_score, synergy_score, notes } = req.body;
+    upsertEvaluation.run({
+      project_id: req.params.id,
+      market_score: parseInt(market_score) || 3,
+      effort_score: parseInt(effort_score) || 3,
+      excitement_score: parseInt(excitement_score) || 3,
+      synergy_score: parseInt(synergy_score) || 3,
+      notes: notes || null
+    });
+    const evaluation = getEvaluationByProject.get({ project_id: req.params.id });
+    res.json(evaluation);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

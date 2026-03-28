@@ -6,7 +6,7 @@
   <title>Jarvis Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=20260328c">
+  <link rel="stylesheet" href="/style.css?v=20260328e">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>">
 </head>
 <body>
@@ -75,6 +75,9 @@
         </a>
         <a class="nav-link" href="#projects" data-view="projects">
           <span class="nav-icon">📁</span> Projects
+        </a>
+        <a class="nav-link" href="#pipeline" data-view="pipeline">
+          <span class="nav-icon">🚀</span> Pipeline
         </a>
         <a class="nav-link" href="#ideas" data-view="ideas">
           <span class="nav-icon">💡</span> Ideas
@@ -323,6 +326,53 @@
   <!-- Task Detail Panel -->
   <div class="task-detail-panel" id="task-detail-panel"></div>
 
-  <script src="/app.js?v=20260328d"></script>
+  <!-- Evaluation Scorecard Modal -->
+  <div class="modal-overlay" id="eval-modal" onclick="closeEvalModal(event)">
+    <div class="modal eval-modal-inner" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="eval-modal-title">Evaluate Project</h3>
+        <button class="modal-close" onclick="closeEvalModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="eval-sliders">
+          <div class="eval-slider-row">
+            <label class="eval-label">🎯 Market Potential <span class="eval-score-val" id="eval-market-val">3</span>/5</label>
+            <input type="range" min="1" max="5" value="3" class="eval-slider" id="eval-market" oninput="updateEvalScore('market')">
+            <div class="eval-desc">How big is the market opportunity?</div>
+          </div>
+          <div class="eval-slider-row">
+            <label class="eval-label">🔧 Effort Required <span class="eval-score-val" id="eval-effort-val">3</span>/5</label>
+            <input type="range" min="1" max="5" value="3" class="eval-slider eval-slider-inverse" id="eval-effort" oninput="updateEvalScore('effort')">
+            <div class="eval-desc">Build complexity (lower effort = higher score)</div>
+          </div>
+          <div class="eval-slider-row">
+            <label class="eval-label">⚡ Excitement <span class="eval-score-val" id="eval-excitement-val">3</span>/5</label>
+            <input type="range" min="1" max="5" value="3" class="eval-slider" id="eval-excitement" oninput="updateEvalScore('excitement')">
+            <div class="eval-desc">How excited are you to build this?</div>
+          </div>
+          <div class="eval-slider-row">
+            <label class="eval-label">🔗 Synergy <span class="eval-score-val" id="eval-synergy-val">3</span>/5</label>
+            <input type="range" min="1" max="5" value="3" class="eval-slider" id="eval-synergy" oninput="updateEvalScore('synergy')">
+            <div class="eval-desc">How well does it fit with existing apps?</div>
+          </div>
+        </div>
+        <div class="eval-total-row">
+          <span class="eval-total-label">Total Score</span>
+          <span class="eval-total-score" id="eval-total-score">9</span>
+          <span class="eval-total-max">/20</span>
+        </div>
+        <div class="modal-field" style="margin-top:1rem">
+          <label>Notes</label>
+          <textarea id="eval-notes" class="modal-textarea" rows="3" placeholder="Additional thoughts..."></textarea>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-move" onclick="saveEvaluation()">Save Scorecard</button>
+        <button class="btn-archive" onclick="closeEvalModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=20260328e"></script>
 </body>
 </html>

@@ -304,6 +304,16 @@ db.exec(`
   try { db.exec(`ALTER TABLE projects ADD COLUMN warning_dismissed_at TEXT`); } catch(e) {}
   db.exec(`UPDATE projects SET last_activity_at = updated_at WHERE last_activity_at IS NULL`);
 
+  // Migration: pipeline_stage on projects
+  try { db.exec(`ALTER TABLE projects ADD COLUMN pipeline_stage TEXT DEFAULT 'idea'`); } catch(e) {}
+  db.exec(`
+    UPDATE projects SET pipeline_stage = CASE
+      WHEN status = 'active' THEN 'building'
+      WHEN status = 'archived' THEN 'archived'
+      ELSE 'idea'
+    END WHERE pipeline_stage IS NULL OR pipeline_stage = 'idea'
+  `);
+
   db.exec(`
 
   CREATE TABLE IF NOT EXISTS project_tags (
@@ -961,6 +971,53 @@ module.exports.getChatMessagesAfter = getChatMessagesAfter;
 module.exports.insertChatMessage = insertChatMessage;
 module.exports.getChatPending = getChatPending;
 module.exports.markChatAnswered = markChatAnswered;
+
+// --- Project Evaluations (Pipeline Scorecard) ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS project_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL UNIQUE,
+    market_score INTEGER DEFAULT 0,
+    effort_score INTEGER DEFAULT 0,
+    excitement_score INTEGER DEFAULT 0,
+    synergy_score INTEGER DEFAULT 0,
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+`);
+
+const upsertEvaluation = db.prepare(`
+  INSERT INTO project_evaluations (project_id, market_score, effort_score, excitement_score, synergy_score, notes, updated_at)
+  VALUES (@project_id, @market_score, @effort_score, @excitement_score, @synergy_score, @notes, datetime('now'))
+  ON CONFLICT(project_id) DO UPDATE SET
+    market_score = @market_score,
+    effort_score = @effort_score,
+    excitement_score = @excitement_score,
+    synergy_score = @synergy_score,
+    notes = @notes,
+    updated_at = datetime('now')
+`);
+
+const getEvaluationByProject = db.prepare(`SELECT * FROM project_evaluations WHERE project_id = @project_id`);
+
+const updateProjectPipelineStage = db.prepare(`
+  UPDATE projects SET pipeline_stage = @pipeline_stage, updated_at = datetime('now') WHERE id = @id
+`);
+
+const getPipelineProjects = db.prepare(`
+  SELECT p.*, pe.market_score, pe.effort_score, pe.excitement_score, pe.synergy_score
+  FROM projects p
+  LEFT JOIN project_evaluations pe ON pe.project_id = p.id
+  WHERE p.pipeline_stage != 'archived' AND p.status != 'archived'
+  ORDER BY p.name ASC
+`);
+
+module.exports.upsertEvaluation = upsertEvaluation;
+module.exports.getEvaluationByProject = getEvaluationByProject;
+module.exports.updateProjectPipelineStage = updateProjectPipelineStage;
+module.exports.getPipelineProjects = getPipelineProjects;
 
 // --- API Usage ---
 
