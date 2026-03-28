@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -2116,6 +2116,143 @@ app.post('/api/notifications/seen', (req, res) => {
     if (!tab || !validTabs.includes(tab)) return res.status(400).json({ error: 'invalid tab' });
     upsertTabVisit.run({ tab_name: tab });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- API Usage Tracking ---
+
+const API_COST_THRESHOLD_GBP = 1.0;
+const GBP_PER_USD = 0.79; // approximate
+
+app.post('/api/usage', (req, res) => {
+  try {
+    const { agent, model, provider, input_tokens, output_tokens, cost_usd, endpoint, task, project } = req.body;
+    if (!agent || !model) return res.status(400).json({ error: 'agent and model required' });
+    const total = (input_tokens || 0) + (output_tokens || 0);
+    const result = insertApiUsage.run({
+      agent,
+      model,
+      provider: provider || null,
+      input_tokens: input_tokens || 0,
+      output_tokens: output_tokens || 0,
+      total_tokens: total,
+      cost_usd: cost_usd || 0,
+      endpoint: endpoint || null,
+      task: task || null,
+      project: project || null,
+      timestamp: new Date().toISOString()
+    });
+
+    // Check if today's cost exceeds threshold — fire alert
+    const today = new Date().toISOString().slice(0, 10);
+    const todayCost = rawDb.prepare(`SELECT COALESCE(SUM(cost_usd), 0) as total FROM api_usage WHERE timestamp >= ?`).get(today + 'T00:00:00').total;
+    const todayCostGBP = todayCost * GBP_PER_USD;
+    if (todayCostGBP >= API_COST_THRESHOLD_GBP) {
+      upsertAlert.run({
+        type: 'api_cost_threshold',
+        entity_id: 'daily',
+        entity_type: 'api_usage',
+        severity: 'amber',
+        message: `Daily API spend has reached £${todayCostGBP.toFixed(2)} (threshold: £${API_COST_THRESHOLD_GBP.toFixed(2)})`
+      });
+    } else {
+      try { deleteAlertByTypeEntity.run({ type: 'api_cost_threshold', entity_id: 'daily' }); } catch(e) {}
+    }
+
+    res.json({ ok: true, id: result.lastInsertRowid });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/usage', (req, res) => {
+  try {
+    const { agent, model, date_from, date_to, limit } = req.query;
+    const rows = getApiUsage.all({
+      agent: agent || null,
+      model: model || null,
+      date_from: date_from || null,
+      date_to: date_to ? date_to + 'T23:59:59' : null,
+      limit: parseInt(limit) || 100
+    });
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/usage/summary', (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const monthStart = today.slice(0, 7) + '-01';
+
+    const todayRow = rawDb.prepare(`
+      SELECT COALESCE(SUM(total_tokens),0) as total_tokens, COALESCE(SUM(cost_usd),0) as cost_usd
+      FROM api_usage WHERE timestamp >= ?
+    `).get(today + 'T00:00:00');
+
+    const todayByModel = rawDb.prepare(`
+      SELECT model, COALESCE(SUM(total_tokens),0) as tokens, COALESCE(SUM(cost_usd),0) as cost
+      FROM api_usage WHERE timestamp >= ? GROUP BY model
+    `).all(today + 'T00:00:00');
+
+    const todayByAgent = rawDb.prepare(`
+      SELECT agent, COALESCE(SUM(total_tokens),0) as tokens, COALESCE(SUM(cost_usd),0) as cost
+      FROM api_usage WHERE timestamp >= ? GROUP BY agent
+    `).all(today + 'T00:00:00');
+
+    const monthRow = rawDb.prepare(`
+      SELECT COALESCE(SUM(total_tokens),0) as total_tokens, COALESCE(SUM(cost_usd),0) as cost_usd
+      FROM api_usage WHERE timestamp >= ?
+    `).get(monthStart + 'T00:00:00');
+
+    const monthByModel = rawDb.prepare(`
+      SELECT model, COALESCE(SUM(total_tokens),0) as tokens, COALESCE(SUM(cost_usd),0) as cost
+      FROM api_usage WHERE timestamp >= ? GROUP BY model
+    `).all(monthStart + 'T00:00:00');
+
+    const monthByAgent = rawDb.prepare(`
+      SELECT agent, COALESCE(SUM(total_tokens),0) as tokens, COALESCE(SUM(cost_usd),0) as cost
+      FROM api_usage WHERE timestamp >= ? GROUP BY agent
+    `).all(monthStart + 'T00:00:00');
+
+    const allTimeRow = rawDb.prepare(`
+      SELECT COALESCE(SUM(total_tokens),0) as total_tokens, COALESCE(SUM(cost_usd),0) as cost_usd FROM api_usage
+    `).get();
+
+    // Daily breakdown: last 30 days
+    const dailyBreakdown = rawDb.prepare(`
+      SELECT substr(timestamp, 1, 10) as date,
+        SUM(total_tokens) as tokens,
+        SUM(cost_usd) as cost
+      FROM api_usage
+      WHERE timestamp >= date('now', '-29 days')
+      GROUP BY substr(timestamp, 1, 10)
+      ORDER BY date ASC
+    `).all();
+
+    const topModels = rawDb.prepare(`
+      SELECT model, SUM(total_tokens) as tokens, SUM(cost_usd) as cost
+      FROM api_usage GROUP BY model ORDER BY tokens DESC LIMIT 5
+    `).all();
+
+    const topAgents = rawDb.prepare(`
+      SELECT agent, SUM(total_tokens) as tokens, SUM(cost_usd) as cost
+      FROM api_usage GROUP BY agent ORDER BY tokens DESC LIMIT 5
+    `).all();
+
+    const toMap = (rows, key) => rows.reduce((acc, r) => { acc[r[key]] = { tokens: r.tokens, cost: r.cost }; return acc; }, {});
+
+    res.json({
+      today: { total_tokens: todayRow.total_tokens, cost_usd: todayRow.cost_usd, cost_gbp: todayRow.cost_usd * GBP_PER_USD, by_model: toMap(todayByModel, 'model'), by_agent: toMap(todayByAgent, 'agent') },
+      this_month: { total_tokens: monthRow.total_tokens, cost_usd: monthRow.cost_usd, cost_gbp: monthRow.cost_usd * GBP_PER_USD, by_model: toMap(monthByModel, 'model'), by_agent: toMap(monthByAgent, 'agent') },
+      all_time: { total_tokens: allTimeRow.total_tokens, cost_usd: allTimeRow.cost_usd, cost_gbp: allTimeRow.cost_usd * GBP_PER_USD },
+      daily_breakdown: dailyBreakdown,
+      top_models: topModels,
+      top_agents: topAgents
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

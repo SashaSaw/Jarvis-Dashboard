@@ -165,6 +165,7 @@ const VIEW_NAMES = {
   workspace: 'Workspace',
   docs: 'Docs',
   finance: 'Finance',
+  usage: 'API Usage',
   log: 'Activity Log'
 };
 
@@ -259,6 +260,7 @@ function route() {
     case 'workspace': renderWorkspace(main); break;
     case 'docs': renderDocs(main); break;
     case 'finance': renderFinance(main); break;
+    case 'usage': renderUsage(main); break;
     case 'log': renderLog(main); break;
     default: renderHome(main); break;
   }
@@ -347,6 +349,7 @@ async function renderHome(container) {
           <span class="home-stat-pill" id="home-stat-alerts">… alerts</span>
           <span class="home-stat-pill blue" id="home-stat-projects">… projects</span>
           <span class="home-stat-pill green" id="home-stat-tasks">… tasks</span>
+          <span class="home-stat-pill purple" id="home-stat-api-spend" onclick="navigate('usage')" style="cursor:pointer" title="Today's API spend">£-- API</span>
         </div>
       </div>
 
@@ -520,7 +523,7 @@ async function renderHome(container) {
 async function refreshHomeData() {
   if (currentView !== 'home') return;
 
-  const [homeData, stats, events, jarvis, klaus, emily, deliverables, heartbeat] = await Promise.all([
+  const [homeData, stats, events, jarvis, klaus, emily, deliverables, heartbeat, usageSummary] = await Promise.all([
     fetchJSON('/api/home'),
     fetchJSON('/api/events/stats'),
     fetchJSON('/api/events?limit=50'),
@@ -528,7 +531,8 @@ async function refreshHomeData() {
     fetchJSON('/api/agent/klaus/status'),
     fetchJSON('/api/agent/emily/status'),
     fetchJSON('/api/scheduled-deliverables'),
-    fetchJSON('/api/heartbeat-status')
+    fetchJSON('/api/heartbeat-status'),
+    fetchJSON('/api/usage/summary')
   ]);
 
   if (currentView !== 'home') return;
@@ -549,6 +553,15 @@ async function refreshHomeData() {
     renderHomeSchedule(homeData.schedule);
     renderHomeTasks(homeData.tasks);
     renderHomeProjects(homeData.projects);
+  }
+
+  if (usageSummary) {
+    const spendEl = document.getElementById('home-stat-api-spend');
+    if (spendEl) {
+      const gbp = usageSummary.today.cost_gbp || 0;
+      spendEl.textContent = `£${gbp.toFixed(3)} API`;
+      spendEl.className = 'home-stat-pill purple' + (gbp >= 1.0 ? ' red' : '');
+    }
   }
 
   renderStats(stats);
@@ -6179,3 +6192,320 @@ function exportExpenses() {
 document.addEventListener('click', () => {
   document.querySelectorAll('.finance-menu-dropdown').forEach(el => el.style.display = 'none');
 });
+
+// ===== API USAGE VIEW =====
+
+let usageFilters = { agent: '', model: '', date_from: '', date_to: '' };
+
+async function renderUsage(container) {
+  container.innerHTML = `
+    <div class="view-container usage-view">
+      <div class="view-header">
+        <h1 class="view-title">📊 API Usage & Cost</h1>
+      </div>
+
+      <!-- Stat Cards -->
+      <div class="stats-row usage-stats-row" id="usage-stat-cards">
+        <div class="stat-card green">
+          <div class="stat-value" id="usage-stat-today-tokens">-</div>
+          <div class="stat-label">Today Tokens</div>
+        </div>
+        <div class="stat-card accent">
+          <div class="stat-value" id="usage-stat-today-cost">-</div>
+          <div class="stat-label">Today Cost</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-value" id="usage-stat-month-tokens">-</div>
+          <div class="stat-label">Month Tokens</div>
+        </div>
+        <div class="stat-card orange">
+          <div class="stat-value" id="usage-stat-month-cost">-</div>
+          <div class="stat-label">Month Cost</div>
+        </div>
+      </div>
+
+      <!-- Charts Row -->
+      <div class="usage-charts-row">
+        <!-- Bar chart: daily tokens -->
+        <section class="usage-section usage-chart-section">
+          <div class="usage-section-header">
+            <span class="usage-section-title">Daily Token Usage (Last 30 Days)</span>
+          </div>
+          <div class="usage-bar-chart-wrap" id="usage-bar-chart-wrap">
+            <div class="usage-chart-loading">Loading chart…</div>
+          </div>
+        </section>
+
+        <!-- Donut: by model -->
+        <section class="usage-section usage-donut-section">
+          <div class="usage-section-header">
+            <span class="usage-section-title">Tokens by Model</span>
+          </div>
+          <div class="usage-donut-wrap" id="usage-donut-wrap">
+            <div class="usage-chart-loading">Loading…</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Top Agents & Models -->
+      <div class="usage-two-col">
+        <section class="usage-section">
+          <div class="usage-section-header"><span class="usage-section-title">Top Agents</span></div>
+          <div id="usage-top-agents" class="usage-top-list"></div>
+        </section>
+        <section class="usage-section">
+          <div class="usage-section-header"><span class="usage-section-title">Top Models</span></div>
+          <div id="usage-top-models" class="usage-top-list"></div>
+        </section>
+      </div>
+
+      <!-- Filters + Table -->
+      <section class="usage-section">
+        <div class="usage-section-header">
+          <span class="usage-section-title">Recent Usage</span>
+          <div class="usage-filters" id="usage-filters">
+            <input type="text" class="usage-filter-input" id="usage-filter-agent" placeholder="Agent…" value="${escapeHtml(usageFilters.agent)}" oninput="usageFilters.agent=this.value">
+            <input type="text" class="usage-filter-input" id="usage-filter-model" placeholder="Model…" value="${escapeHtml(usageFilters.model)}" oninput="usageFilters.model=this.value">
+            <input type="date" class="usage-filter-input" id="usage-filter-from" value="${usageFilters.date_from}" oninput="usageFilters.date_from=this.value">
+            <input type="date" class="usage-filter-input" id="usage-filter-to" value="${usageFilters.date_to}" oninput="usageFilters.date_to=this.value">
+            <button class="btn-ghost" onclick="refreshUsageTable()">Filter</button>
+          </div>
+        </div>
+        <div class="usage-table-wrap">
+          <table class="usage-table" id="usage-table">
+            <thead><tr>
+              <th>Time</th><th>Agent</th><th>Model</th><th>Tokens</th><th>Cost (£)</th><th>Task</th><th>Project</th>
+            </tr></thead>
+            <tbody id="usage-table-body"><tr><td colspan="7" class="usage-empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  `;
+
+  loadUsageData();
+}
+
+async function loadUsageData() {
+  const [summary, rows] = await Promise.all([
+    fetchJSON('/api/usage/summary'),
+    fetchJSON('/api/usage?limit=100')
+  ]);
+  if (currentView !== 'usage') return;
+  if (summary) renderUsageSummary(summary);
+  if (rows) renderUsageTable(rows);
+}
+
+async function refreshUsageTable() {
+  const params = new URLSearchParams();
+  if (usageFilters.agent) params.set('agent', usageFilters.agent);
+  if (usageFilters.model) params.set('model', usageFilters.model);
+  if (usageFilters.date_from) params.set('date_from', usageFilters.date_from);
+  if (usageFilters.date_to) params.set('date_to', usageFilters.date_to);
+  params.set('limit', '200');
+  const rows = await fetchJSON(`/api/usage?${params}`);
+  if (rows) renderUsageTable(rows);
+}
+
+function fmtTokens(n) {
+  if (!n) return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return n.toString();
+}
+
+function fmtGBP(usd) {
+  const gbp = (usd || 0) * 0.79;
+  return '£' + gbp.toFixed(4);
+}
+
+function renderUsageSummary(s) {
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  set('usage-stat-today-tokens', fmtTokens(s.today.total_tokens));
+  set('usage-stat-today-cost', '£' + (s.today.cost_gbp || 0).toFixed(3));
+  set('usage-stat-month-tokens', fmtTokens(s.this_month.total_tokens));
+  set('usage-stat-month-cost', '£' + (s.this_month.cost_gbp || 0).toFixed(2));
+
+  renderDailyBarChart(s.daily_breakdown || []);
+  renderModelDonut(s.top_models || []);
+  renderTopList('usage-top-agents', s.top_agents || [], 'agent');
+  renderTopList('usage-top-models', s.top_models || [], 'model');
+}
+
+function renderDailyBarChart(data) {
+  const wrap = document.getElementById('usage-bar-chart-wrap');
+  if (!wrap) return;
+  if (!data.length) { wrap.innerHTML = '<div class="usage-empty">No data</div>'; return; }
+
+  const W = wrap.clientWidth || 600;
+  const H = 160;
+  const PAD = { top: 10, right: 10, bottom: 30, left: 45 };
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top - PAD.bottom;
+
+  const maxTokens = Math.max(...data.map(d => d.tokens), 1);
+  const barW = Math.max(2, Math.floor(chartW / data.length) - 2);
+
+  // Fill in missing dates for last 30 days
+  const today = new Date();
+  const allDates = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    allDates.push(d.toISOString().slice(0, 10));
+  }
+  const dataMap = {};
+  data.forEach(d => { dataMap[d.date] = d; });
+  const fullData = allDates.map(date => dataMap[date] || { date, tokens: 0, cost: 0 });
+
+  const bars = fullData.map((d, i) => {
+    const x = PAD.left + (i / fullData.length) * chartW;
+    const barH = Math.max(2, (d.tokens / maxTokens) * chartH);
+    const y = PAD.top + chartH - barH;
+    const label = d.date.slice(5); // MM-DD
+    const isToday = d.date === new Date().toISOString().slice(0, 10);
+    return { x, y, barH, barW: Math.max(2, chartW / fullData.length - 1), label, d, isToday };
+  });
+
+  // Y axis labels
+  const yLabels = [0, 0.25, 0.5, 0.75, 1].map(f => ({
+    y: PAD.top + chartH - f * chartH,
+    text: fmtTokens(Math.round(maxTokens * f))
+  }));
+
+  const barsHtml = bars.map(b => `
+    <g class="usage-bar-group">
+      <rect x="${b.x}" y="${b.y}" width="${b.barW}" height="${b.barH}"
+        fill="${b.isToday ? 'var(--accent)' : 'var(--blue-dim)'}"
+        rx="2" class="usage-bar"
+        onmouseover="showBarTooltip(event,'${b.d.date}',${b.d.tokens},${b.d.cost})"
+        onmouseout="hideBarTooltip()"
+      />
+    </g>
+  `).join('');
+
+  const yAxisHtml = yLabels.map(l => `
+    <text x="${PAD.left - 5}" y="${l.y + 4}" text-anchor="end" class="usage-axis-label">${l.text}</text>
+    <line x1="${PAD.left}" y1="${l.y}" x2="${PAD.left + chartW}" y2="${l.y}" stroke="var(--border)" stroke-width="0.5" />
+  `).join('');
+
+  // X axis: show every ~5th label
+  const xAxisHtml = bars.filter((_, i) => i % 5 === 0 || i === bars.length - 1).map(b => `
+    <text x="${b.x + b.barW / 2}" y="${H - 5}" text-anchor="middle" class="usage-axis-label">${b.label}</text>
+  `).join('');
+
+  wrap.innerHTML = `
+    <div class="usage-tooltip" id="usage-bar-tooltip" style="display:none"></div>
+    <svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="overflow:visible">
+      ${yAxisHtml}
+      ${barsHtml}
+      ${xAxisHtml}
+      <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + chartH}" stroke="var(--border)" stroke-width="1"/>
+      <line x1="${PAD.left}" y1="${PAD.top + chartH}" x2="${PAD.left + chartW}" y2="${PAD.top + chartH}" stroke="var(--border)" stroke-width="1"/>
+    </svg>
+  `;
+}
+
+function showBarTooltip(evt, date, tokens, cost) {
+  const tip = document.getElementById('usage-bar-tooltip');
+  if (!tip) return;
+  tip.style.display = 'block';
+  tip.style.left = (evt.offsetX + 12) + 'px';
+  tip.style.top = (evt.offsetY - 30) + 'px';
+  tip.innerHTML = `<strong>${date}</strong><br>${fmtTokens(tokens)} tokens<br>${fmtGBP(cost)}`;
+}
+
+function hideBarTooltip() {
+  const tip = document.getElementById('usage-bar-tooltip');
+  if (tip) tip.style.display = 'none';
+}
+
+const DONUT_COLORS = ['var(--accent)', 'var(--blue)', 'var(--green)', 'var(--orange)', 'var(--red)', 'var(--yellow)'];
+
+function renderModelDonut(models) {
+  const wrap = document.getElementById('usage-donut-wrap');
+  if (!wrap) return;
+  if (!models.length) { wrap.innerHTML = '<div class="usage-empty">No data</div>'; return; }
+
+  const total = models.reduce((s, m) => s + m.tokens, 0) || 1;
+  const cx = 80, cy = 80, r = 60, ri = 36;
+  let angle = -Math.PI / 2;
+  const slices = [];
+
+  models.forEach((m, i) => {
+    const frac = m.tokens / total;
+    const sweep = frac * 2 * Math.PI;
+    const x1 = cx + r * Math.cos(angle);
+    const y1 = cy + r * Math.sin(angle);
+    angle += sweep;
+    const x2 = cx + r * Math.cos(angle);
+    const y2 = cy + r * Math.sin(angle);
+    const xi1 = cx + ri * Math.cos(angle);
+    const yi1 = cy + ri * Math.sin(angle);
+    const xi2 = cx + ri * Math.cos(angle - sweep);
+    const yi2 = cy + ri * Math.sin(angle - sweep);
+    const large = sweep > Math.PI ? 1 : 0;
+    slices.push({ m, frac, color: DONUT_COLORS[i % DONUT_COLORS.length], x1, y1, x2, y2, xi1, yi1, xi2, yi2, large });
+  });
+
+  const paths = slices.map(s => `
+    <path d="M${s.x1} ${s.y1} A${r} ${r} 0 ${s.large} 1 ${s.x2} ${s.y2} L${s.xi1} ${s.yi1} A${ri} ${ri} 0 ${s.large} 0 ${s.xi2} ${s.yi2} Z"
+      fill="${s.color}" opacity="0.85" />
+  `).join('');
+
+  const legend = models.map((m, i) => `
+    <div class="usage-legend-item">
+      <span class="usage-legend-dot" style="background:${DONUT_COLORS[i % DONUT_COLORS.length]}"></span>
+      <span class="usage-legend-label">${escapeHtml(m.model.split('/').pop())}</span>
+      <span class="usage-legend-pct">${((m.tokens / total) * 100).toFixed(0)}%</span>
+    </div>
+  `).join('');
+
+  wrap.innerHTML = `
+    <div class="usage-donut-inner">
+      <svg width="160" height="160" viewBox="0 0 160 160">
+        ${paths}
+        <text x="${cx}" y="${cy + 4}" text-anchor="middle" class="usage-donut-center">${fmtTokens(total)}</text>
+        <text x="${cx}" y="${cy + 16}" text-anchor="middle" class="usage-donut-sublabel">total</text>
+      </svg>
+      <div class="usage-legend">${legend}</div>
+    </div>
+  `;
+}
+
+function renderTopList(elId, items, key) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!items.length) { el.innerHTML = '<div class="usage-empty">No data</div>'; return; }
+  const max = items[0].tokens || 1;
+  el.innerHTML = items.map(item => `
+    <div class="usage-top-item">
+      <div class="usage-top-label">${escapeHtml(item[key])}</div>
+      <div class="usage-top-bar-wrap">
+        <div class="usage-top-bar" style="width:${Math.max(4, (item.tokens / max) * 100)}%"></div>
+      </div>
+      <div class="usage-top-tokens">${fmtTokens(item.tokens)}</div>
+      <div class="usage-top-cost">${fmtGBP(item.cost)}</div>
+    </div>
+  `).join('');
+}
+
+function renderUsageTable(rows) {
+  const tbody = document.getElementById('usage-table-body');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="usage-empty">No usage records found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td class="usage-time">${timeAgo(r.timestamp)}</td>
+      <td><span class="usage-agent-tag">${escapeHtml(r.agent)}</span></td>
+      <td class="usage-model">${escapeHtml(r.model.split('/').pop())}</td>
+      <td class="usage-tokens">${fmtTokens(r.total_tokens)}</td>
+      <td class="usage-cost">${fmtGBP(r.cost_usd)}</td>
+      <td class="usage-task">${r.task ? escapeHtml(r.task) : '<span class="usage-na">—</span>'}</td>
+      <td class="usage-project">${r.project ? escapeHtml(r.project) : '<span class="usage-na">—</span>'}</td>
+    </tr>
+  `).join('');
+}

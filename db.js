@@ -961,3 +961,87 @@ module.exports.getChatMessagesAfter = getChatMessagesAfter;
 module.exports.insertChatMessage = insertChatMessage;
 module.exports.getChatPending = getChatPending;
 module.exports.markChatAnswered = markChatAnswered;
+
+// --- API Usage ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS api_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    model TEXT NOT NULL,
+    provider TEXT,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    cost_usd REAL DEFAULT 0,
+    endpoint TEXT,
+    task TEXT,
+    project TEXT,
+    timestamp TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_api_usage_timestamp ON api_usage(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_api_usage_agent ON api_usage(agent);
+  CREATE INDEX IF NOT EXISTS idx_api_usage_model ON api_usage(model);
+`);
+
+const insertApiUsage = db.prepare(`
+  INSERT INTO api_usage (agent, model, provider, input_tokens, output_tokens, total_tokens, cost_usd, endpoint, task, project, timestamp)
+  VALUES (@agent, @model, @provider, @input_tokens, @output_tokens, @total_tokens, @cost_usd, @endpoint, @task, @project, @timestamp)
+`);
+
+const getApiUsage = db.prepare(`
+  SELECT * FROM api_usage
+  WHERE (@agent IS NULL OR agent = @agent)
+    AND (@model IS NULL OR model = @model)
+    AND (@date_from IS NULL OR timestamp >= @date_from)
+    AND (@date_to IS NULL OR timestamp <= @date_to)
+  ORDER BY timestamp DESC
+  LIMIT @limit
+`);
+
+// Seed example data if table is empty
+const usageCount = db.prepare('SELECT COUNT(*) as c FROM api_usage').get();
+if (usageCount.c === 0) {
+  const seedModels = [
+    { model: 'claude-opus-4-6', provider: 'anthropic', cost_per_1k_in: 0.015, cost_per_1k_out: 0.075 },
+    { model: 'claude-sonnet-4-6', provider: 'anthropic', cost_per_1k_in: 0.003, cost_per_1k_out: 0.015 },
+    { model: 'kimi-k2', provider: 'moonshot', cost_per_1k_in: 0.0006, cost_per_1k_out: 0.0025 },
+  ];
+  const seedAgents = ['jarvis', 'klaus', 'emily'];
+  const seedTasks = ['Sprint planning', 'Code review', 'Feature implementation', 'Bug fix', 'Documentation', 'Research'];
+  const seedProjects = ['jarvis-dashboard', 'openclip', 'personal-api', 'blog'];
+
+  const insertSeed = db.prepare(`
+    INSERT INTO api_usage (agent, model, provider, input_tokens, output_tokens, total_tokens, cost_usd, task, project, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const seedMany = db.transaction(() => {
+    for (let dayOffset = 29; dayOffset >= 0; dayOffset--) {
+      const date = new Date();
+      date.setDate(date.getDate() - dayOffset);
+      const dateStr = date.toISOString().slice(0, 10);
+
+      // 3-12 entries per day
+      const entriesPerDay = 3 + Math.floor(Math.random() * 9);
+      for (let i = 0; i < entriesPerDay; i++) {
+        const m = seedModels[Math.floor(Math.random() * seedModels.length)];
+        const agent = seedAgents[Math.floor(Math.random() * seedAgents.length)];
+        const task = seedTasks[Math.floor(Math.random() * seedTasks.length)];
+        const project = seedProjects[Math.floor(Math.random() * seedProjects.length)];
+        const input = 500 + Math.floor(Math.random() * 8000);
+        const output = 200 + Math.floor(Math.random() * 3000);
+        const total = input + output;
+        const cost = (input / 1000) * m.cost_per_1k_in + (output / 1000) * m.cost_per_1k_out;
+        const hour = Math.floor(Math.random() * 18) + 7;
+        const min = Math.floor(Math.random() * 60);
+        const ts = `${dateStr} ${String(hour).padStart(2,'0')}:${String(min).padStart(2,'0')}:00`;
+        insertSeed.run(agent, m.model, m.provider, input, output, total, cost, task, project, ts);
+      }
+    }
+  });
+  seedMany();
+}
+
+module.exports.insertApiUsage = insertApiUsage;
+module.exports.getApiUsage = getApiUsage;
