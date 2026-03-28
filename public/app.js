@@ -440,6 +440,7 @@ async function renderHome(container) {
         <section class="home-section" id="home-schedule-section">
           <div class="home-section-header">
             <span class="home-section-title">🗓 Today's Schedule</span>
+            <button class="btn-ghost home-schedule-gen-btn" id="home-auto-schedule-btn" style="display:none;font-size:0.75rem" onclick="homeGenerateSchedule()">⚡ Generate Schedule</button>
           </div>
           <div id="home-schedule-list" class="home-loading">Loading…</div>
         </section>
@@ -561,7 +562,7 @@ async function refreshHomeData() {
 
     renderHomeGoals(homeData.goals);
     renderHomeAlerts(homeData.alerts);
-    renderHomeSchedule(homeData.schedule);
+    renderHomeSchedule(homeData.schedule, homeData.goals);
     renderHomeTasks(homeData.tasks);
     renderHomeProjects(homeData.projects);
     renderHomePipeline();
@@ -628,14 +629,41 @@ async function dismissHomeAlert(id) {
   }
 }
 
-function renderHomeSchedule(schedule) {
+function renderHomeSchedule(schedule, goals) {
   const el = document.getElementById('home-schedule-list');
+  const genBtn = document.getElementById('home-auto-schedule-btn');
   if (!el) return;
-  if (!schedule || schedule.length === 0) {
-    el.innerHTML = '<div class="home-empty">Nothing scheduled for today.</div>';
+
+  const hasGoals = goals && goals.length > 0;
+  const noSchedule = !schedule || schedule.length === 0;
+
+  // Show CTA if no schedule but goals exist
+  if (genBtn) genBtn.style.display = (noSchedule && hasGoals) ? 'inline-flex' : 'none';
+
+  if (noSchedule) {
+    if (hasGoals) {
+      el.innerHTML = `
+        <div class="home-schedule-cta">
+          <div class="home-schedule-cta-text">You have goals but no schedule yet.</div>
+          <button class="btn-primary home-schedule-cta-btn" onclick="homeGenerateSchedule()">⚡ Generate Today's Schedule</button>
+        </div>`;
+    } else {
+      el.innerHTML = '<div class="home-empty">Nothing scheduled for today.</div>';
+    }
     return;
   }
-  el.innerHTML = `<div class="home-timeline">${schedule.map(s => `
+
+  // Show compact next-3 items (sorted by start_time)
+  const now = new Date();
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  const sorted = [...schedule].sort((a, b) => a.start_time.localeCompare(b.start_time));
+  const upcoming = sorted.filter(s => {
+    const [h, m] = s.start_time.split(':').map(Number);
+    return h * 60 + m >= nowMins - 30;
+  });
+  const display = (upcoming.length > 0 ? upcoming : sorted).slice(0, 3);
+
+  el.innerHTML = `<div class="home-timeline">${display.map(s => `
     <div class="timeline-item" style="--item-color:${escapeHtml(s.color || '#7c6bf0')}">
       <div class="timeline-time">${escapeHtml(s.start_time)} – ${escapeHtml(s.end_time)}</div>
       <div class="timeline-content">
@@ -643,7 +671,34 @@ function renderHomeSchedule(schedule) {
         ${s.description ? `<span class="timeline-desc">${escapeHtml(s.description)}</span>` : ''}
       </div>
     </div>
-  `).join('')}</div>`;
+  `).join('')}${schedule.length > 3 ? `<div class="home-timeline-more" onclick="navigate('schedule')">+${schedule.length - 3} more — View full schedule →</div>` : ''}</div>`;
+}
+
+async function homeGenerateSchedule() {
+  const btn = document.getElementById('home-auto-schedule-btn');
+  const ctaBtn = document.querySelector('.home-schedule-cta-btn');
+  if (btn) btn.textContent = '⏳ Generating…';
+  if (ctaBtn) { ctaBtn.textContent = '⏳ Generating…'; ctaBtn.disabled = true; }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const data = await fetchJSON('/api/schedule/auto-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: today })
+  });
+
+  if (btn) btn.textContent = '⚡ Generate Schedule';
+  if (ctaBtn) { ctaBtn.textContent = '⚡ Generate Today\'s Schedule'; ctaBtn.disabled = false; }
+
+  if (!data || !data.proposals || data.proposals.length === 0) {
+    alert('No goal steps to schedule. Make sure your goals have steps with estimated times.');
+    return;
+  }
+
+  // Navigate to schedule page and trigger auto-generate
+  navigate('schedule');
+  // Small delay to let renderSchedule run, then trigger auto-generate
+  setTimeout(() => autoGenerateSchedule(), 300);
 }
 
 function renderHomeTasks(tasks) {
@@ -1519,6 +1574,24 @@ async function renderSchedule(container) {
     <div class="view-container">
       <div class="view-header">
         <h2 class="view-title">🗓️ Schedule</h2>
+        <button class="btn-primary auto-schedule-btn" onclick="autoGenerateSchedule()" id="auto-schedule-btn">
+          ⚡ Auto-Schedule
+        </button>
+      </div>
+
+      <!-- Auto-Schedule Preview Panel (hidden by default) -->
+      <div class="auto-schedule-preview" id="auto-schedule-preview" style="display:none">
+        <div class="auto-schedule-preview-header">
+          <div>
+            <span class="auto-schedule-preview-title">⚡ Proposed Schedule</span>
+            <span class="auto-schedule-preview-subtitle" id="auto-preview-subtitle">Generated from your goals</span>
+          </div>
+          <div class="auto-schedule-preview-actions">
+            <button class="btn-primary" onclick="confirmAutoSchedule()" id="auto-confirm-btn">✓ Confirm &amp; Save</button>
+            <button class="btn-ghost" onclick="discardAutoSchedule()">✕ Discard</button>
+          </div>
+        </div>
+        <div id="auto-schedule-blocks" class="auto-schedule-blocks"></div>
       </div>
 
       <!-- Calendar Controls -->
@@ -1649,6 +1722,124 @@ async function refreshScheduleData() {
 
   // Agenda
   renderAgenda(todaySchedule, calendar);
+}
+
+// ===== AUTO-SCHEDULE =====
+
+let autoScheduleProposals = [];
+
+async function autoGenerateSchedule() {
+  const btn = document.getElementById('auto-schedule-btn');
+  const preview = document.getElementById('auto-schedule-preview');
+  if (btn) { btn.textContent = '⏳ Generating…'; btn.disabled = true; }
+
+  const today = calDateStr(new Date());
+  const data = await fetchJSON('/api/schedule/auto-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: today })
+  });
+
+  if (btn) { btn.textContent = '⚡ Auto-Schedule'; btn.disabled = false; }
+  if (!data) return;
+
+  autoScheduleProposals = data.proposals || [];
+
+  if (autoScheduleProposals.length === 0) {
+    alert('No goal steps found to schedule. Add goals with steps first.');
+    return;
+  }
+
+  const subtitle = document.getElementById('auto-preview-subtitle');
+  if (subtitle) subtitle.textContent = `${autoScheduleProposals.length} block${autoScheduleProposals.length !== 1 ? 's' : ''} from ${data.goals_count} goal${data.goals_count !== 1 ? 's' : ''} — review before saving`;
+
+  renderAutoScheduleBlocks();
+  if (preview) preview.style.display = 'block';
+  preview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderAutoScheduleBlocks() {
+  const el = document.getElementById('auto-schedule-blocks');
+  if (!el) return;
+  if (!autoScheduleProposals.length) {
+    el.innerHTML = '<div class="auto-schedule-empty">No blocks to preview.</div>';
+    return;
+  }
+  el.innerHTML = autoScheduleProposals.map((p, i) => `
+    <div class="auto-block" data-idx="${i}">
+      <div class="auto-block-time">${escapeHtml(p.start_time)} – ${escapeHtml(p.end_time)}</div>
+      <div class="auto-block-body">
+        <div class="auto-block-goal">${escapeHtml(p.goal_title)}</div>
+        <div class="auto-block-step">${escapeHtml(p.step_title)}</div>
+        <div class="auto-block-duration">${p.duration} min</div>
+      </div>
+      <div class="auto-block-controls">
+        <button class="auto-block-move" onclick="autoMoveBlock(${i}, -1)" title="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="auto-block-move" onclick="autoMoveBlock(${i}, 1)" title="Move down" ${i === autoScheduleProposals.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="auto-block-remove" onclick="autoRemoveBlock(${i})" title="Remove">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function autoMoveBlock(idx, dir) {
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= autoScheduleProposals.length) return;
+  // Swap
+  [autoScheduleProposals[idx], autoScheduleProposals[newIdx]] = [autoScheduleProposals[newIdx], autoScheduleProposals[idx]];
+  // Recalculate times sequentially from first block's start_time
+  recalcProposalTimes();
+  renderAutoScheduleBlocks();
+}
+
+function autoRemoveBlock(idx) {
+  autoScheduleProposals.splice(idx, 1);
+  recalcProposalTimes();
+  renderAutoScheduleBlocks();
+  if (autoScheduleProposals.length === 0) discardAutoSchedule();
+}
+
+function recalcProposalTimes() {
+  if (!autoScheduleProposals.length) return;
+  let cursor = timeStrToMins(autoScheduleProposals[0].start_time);
+  for (const p of autoScheduleProposals) {
+    p.start_time = minsToTimeStr(cursor);
+    p.end_time = minsToTimeStr(cursor + p.duration);
+    cursor = cursor + p.duration + 15;
+  }
+}
+
+function timeStrToMins(t) {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minsToTimeStr(m) {
+  return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+}
+
+async function confirmAutoSchedule() {
+  const btn = document.getElementById('auto-confirm-btn');
+  if (btn) { btn.textContent = '⏳ Saving…'; btn.disabled = true; }
+
+  const today = calDateStr(new Date());
+  const data = await fetchJSON('/api/schedule/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: today, items: autoScheduleProposals })
+  });
+
+  if (btn) { btn.textContent = '✓ Confirm & Save'; btn.disabled = false; }
+  if (!data) return;
+
+  discardAutoSchedule();
+  refreshScheduleData();
+}
+
+function discardAutoSchedule() {
+  autoScheduleProposals = [];
+  const preview = document.getElementById('auto-schedule-preview');
+  if (preview) preview.style.display = 'none';
 }
 
 // ===== DELIVERABLE BLOCKS FOR SCHEDULE =====

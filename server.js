@@ -488,6 +488,138 @@ app.delete('/api/schedule/:id', (req, res) => {
   }
 });
 
+// --- Schedule Smart Scheduling ---
+
+function timeToMins(t) {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minsToTime(m) {
+  return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+}
+
+function buildScheduleProposals(goals, existingItems, calEvents, date) {
+  const WORK_START = 9 * 60;
+  const WORK_END = 18 * 60;
+  const BUFFER = 15;
+
+  const occupied = [];
+
+  for (const item of existingItems) {
+    occupied.push([timeToMins(item.start_time), timeToMins(item.end_time)]);
+  }
+
+  for (const e of calEvents) {
+    if (e.allDay) continue;
+    const startRaw = e.start?.dateTime || e.start?.date || e.start;
+    const endRaw = e.end?.dateTime || e.end?.date || e.end;
+    if (!startRaw) continue;
+    try {
+      const startDt = new Date(startRaw);
+      const endDt = endRaw ? new Date(endRaw) : new Date(startDt.getTime() + 3600000);
+      const startL = new Date(startDt.toLocaleString('en-US', { timeZone: 'Europe/London' }));
+      const endL = new Date(endDt.toLocaleString('en-US', { timeZone: 'Europe/London' }));
+      occupied.push([startL.getHours() * 60 + startL.getMinutes(), endL.getHours() * 60 + endL.getMinutes()]);
+    } catch (_) {}
+  }
+
+  occupied.sort((a, b) => a[0] - b[0]);
+
+  const proposals = [];
+  let cursor = WORK_START;
+
+  for (const goal of goals) {
+    const steps = (goal.steps || []).filter(s => s.status !== 'done' && s.status !== 'skipped');
+    for (const step of steps) {
+      const duration = step.estimated_minutes || 30;
+      let start = cursor;
+      let found = false;
+      while (start + duration <= WORK_END) {
+        const end = start + duration;
+        const conflict = occupied.find(([os, oe]) => start < oe && end > os);
+        if (!conflict) { found = true; break; }
+        start = conflict[1] + BUFFER;
+      }
+      if (!found) continue;
+      const endMins = start + duration;
+      proposals.push({
+        title: step.title,
+        description: goal.title,
+        date,
+        start_time: minsToTime(start),
+        end_time: minsToTime(endMins),
+        category: 'goal-step',
+        goal_id: goal.id,
+        step_id: step.id,
+        goal_title: goal.title,
+        step_title: step.title,
+        duration,
+        color: '#10b981'
+      });
+      occupied.push([start, endMins + BUFFER]);
+      occupied.sort((a, b) => a[0] - b[0]);
+      cursor = endMins + BUFFER;
+    }
+  }
+
+  return proposals;
+}
+
+app.post('/api/schedule/auto-generate', async (req, res) => {
+  try {
+    const date = req.body.date || new Date().toISOString().slice(0, 10);
+    const rawGoals = getGoalsByDate.all({ date });
+    const goals = rawGoals.map(g => ({ ...g, steps: getStepsByGoal.all({ goal_id: g.id }) }));
+    const existingItems = getScheduleByDate.all({ date });
+    let calEvents = [];
+    try { calEvents = getTodayEvents(); } catch (_) {}
+    const proposals = buildScheduleProposals(goals, existingItems, calEvents, date);
+    res.json({ date, proposals, goals_count: rawGoals.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/schedule/confirm', (req, res) => {
+  try {
+    const { date, items } = req.body;
+    if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'items array required' });
+    const saved = [];
+    for (const item of items) {
+      const result = insertSchedule.run({
+        title: item.title,
+        description: item.description || null,
+        start_time: item.start_time,
+        end_time: item.end_time,
+        date: item.date || date,
+        color: item.color || '#10b981',
+        task_id: null,
+        recurring: null
+      });
+      saved.push(getScheduleById.get({ id: result.lastInsertRowid }));
+    }
+    res.json({ saved, count: saved.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/schedule/suggestions', async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    const rawGoals = getGoalsByDate.all({ date });
+    const goals = rawGoals.map(g => ({ ...g, steps: getStepsByGoal.all({ goal_id: g.id }) }));
+    const existingItems = getScheduleByDate.all({ date });
+    let calEvents = [];
+    try { calEvents = getTodayEvents(); } catch (_) {}
+    const proposals = buildScheduleProposals(goals, existingItems, calEvents, date);
+    res.json({ date, proposals });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Documents API ---
 
 app.post('/api/docs', (req, res) => {
