@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -294,7 +294,30 @@ app.get('/api/tasks', (req, res) => {
         category: category || null
       });
     }
+    // Attach step counts
+    const stepCounts = getTaskStepCounts.all();
+    const stepMap = {};
+    stepCounts.forEach(r => { stepMap[r.task_id] = r; });
+    tasks = tasks.map(t => ({
+      ...t,
+      total_steps: stepMap[t.id]?.total_steps || 0,
+      completed_steps: stepMap[t.id]?.completed_steps || 0
+    }));
     res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tasks/:id', (req, res) => {
+  try {
+    const task = getTaskById.get({ id: parseInt(req.params.id) });
+    if (!task) return res.status(404).json({ error: 'not found' });
+    // Attach step counts
+    const steps = getStepsByTask.all({ task_id: task.id });
+    task.total_steps = steps.length;
+    task.completed_steps = steps.filter(s => s.status === 'done').length;
+    res.json(task);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -329,11 +352,63 @@ app.delete('/api/tasks/:id', (req, res) => {
 
 app.put('/api/tasks/:id/move', (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, completion_summary } = req.body;
     if (!status) return res.status(400).json({ error: 'status required' });
-    moveTask.run({ id: parseInt(req.params.id), status });
+    moveTask.run({ id: parseInt(req.params.id), status, completion_summary: completion_summary || null });
     const task = getTaskById.get({ id: parseInt(req.params.id) });
     res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Task Steps API ---
+
+app.post('/api/tasks/:id/steps', (req, res) => {
+  try {
+    const taskId = parseInt(req.params.id);
+    const { steps } = req.body;
+    if (!steps || !Array.isArray(steps)) return res.status(400).json({ error: 'steps array required' });
+    const inserted = steps.map((s, i) => {
+      const result = insertTaskStep.run({ task_id: taskId, title: s.title, description: s.description || null, sort_order: s.sort_order ?? i });
+      return getTaskStepById.get({ id: result.lastInsertRowid });
+    });
+    res.json(inserted);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tasks/:id/steps', (req, res) => {
+  try {
+    const steps = getStepsByTask.all({ task_id: parseInt(req.params.id) });
+    res.json(steps);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/tasks/:id/steps/:stepId', (req, res) => {
+  try {
+    const { title, status, description, sort_order } = req.body;
+    updateTaskStep.run({
+      id: parseInt(req.params.stepId),
+      title: title !== undefined ? title : null,
+      description: description !== undefined ? description : null,
+      status: status !== undefined ? status : null,
+      sort_order: sort_order !== undefined ? sort_order : null
+    });
+    const step = getTaskStepById.get({ id: parseInt(req.params.stepId) });
+    res.json(step);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/tasks/:id/steps/:stepId', (req, res) => {
+  try {
+    deleteTaskStep.run({ id: parseInt(req.params.stepId) });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

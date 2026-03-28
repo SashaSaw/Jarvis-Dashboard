@@ -2240,7 +2240,10 @@ async function refreshInboxList() {
     <div class="inbox-task" onclick="toggleTaskExpand(${t.id})">
       <div class="inbox-task-priority priority-${t.priority}"></div>
       <div class="inbox-task-content">
-        <div class="inbox-task-title">${escapeHtml(t.title)}</div>
+        <div class="inbox-task-title">
+          ${escapeHtml(t.title)}
+          ${t.total_steps > 0 ? `<span class="inbox-step-indicator" title="${t.completed_steps}/${t.total_steps} steps">◈ ${t.completed_steps}/${t.total_steps}</span>` : ''}
+        </div>
         <div class="inbox-task-meta">
           ${priorityBadgeHtml(t.priority)}
           ${categoryTagHtml(t.category)}
@@ -2249,7 +2252,8 @@ async function refreshInboxList() {
         ${expandedTaskId === t.id && t.description ? `<div class="inbox-task-desc">${escapeHtml(t.description)}</div>` : ''}
       </div>
       <div class="inbox-task-actions" onclick="event.stopPropagation()">
-        <button class="inbox-btn edit-btn" onclick="openTaskEdit(${t.id})" title="Edit">✏️</button>
+        <button class="inbox-btn edit-btn" onclick="openTaskDetail(${t.id})" title="Edit">✏️</button>
+        <button class="inbox-btn breakdown-btn" onclick="openTaskDetail(${t.id})" title="Break Down into steps">⚡ Break Down</button>
         <button class="inbox-btn kanban-btn" onclick="moveToKanban(${t.id})" title="Move to Kanban">📋 Kanban</button>
         <button class="inbox-btn delete-btn" onclick="deleteInboxTask(${t.id})" title="Delete">🗑</button>
       </div>
@@ -2277,17 +2281,7 @@ async function deleteInboxTask(id) {
 }
 
 function openTaskEdit(id) {
-  editingTaskId = id;
-  // Fetch task data
-  fetchJSON(`/api/tasks?status=inbox`).then(tasks => {
-    const task = tasks?.find(t => t.id === id);
-    if (!task) return;
-    document.getElementById('task-modal-name').value = task.title || '';
-    document.getElementById('task-modal-desc').value = task.description || '';
-    document.getElementById('task-modal-priority').value = task.priority || 'normal';
-    document.getElementById('task-modal-category').value = task.category || '';
-    document.getElementById('task-modal').classList.add('visible');
-  });
+  openTaskDetail(id);
 }
 
 async function saveTaskModal() {
@@ -2380,10 +2374,12 @@ async function refreshKanbanData() {
             const idx = statusFlow.indexOf(t.status);
             const canLeft = idx > 0;
             const canRight = idx < statusFlow.length - 1;
+            const hasSteps = t.total_steps > 0;
+            const stepPct = hasSteps ? Math.round((t.completed_steps / t.total_steps) * 100) : 0;
             return `
               <div class="kanban-card" draggable="true" data-task-id="${t.id}" data-task-status="${t.status}"
                    ondragstart="kanbanDragStart(event, ${t.id})" ondragend="kanbanDragEnd(event)"
-                   onclick="openKanbanTaskEdit(${t.id})">
+                   onclick="openTaskDetail(${t.id})">
                 <div class="kanban-card-top">
                   <div class="kanban-card-title">${escapeHtml(t.title)}</div>
                   <button class="kanban-card-menu-btn" onclick="event.stopPropagation(); kanbanContextMenu(event, ${t.id}, '${t.status}')" title="Move card">⋮</button>
@@ -2391,8 +2387,13 @@ async function refreshKanbanData() {
                 <div class="kanban-card-meta">
                   ${priorityBadgeHtml(t.priority)}
                   ${categoryTagHtml(t.category)}
-                  <span class="kanban-card-time">${timeAgo(t.updated_at)}</span>
+                  ${t.status === 'in_progress' && t.started_at ? `<span class="kanban-card-time">Started ${timeAgo(t.started_at)}</span>` : `<span class="kanban-card-time">${timeAgo(t.updated_at)}</span>`}
                 </div>
+                ${hasSteps ? `
+                  <div class="step-progress">
+                    <div class="step-progress-bar"><div class="step-progress-fill" style="width:${stepPct}%"></div></div>
+                    <span class="step-progress-label">${t.completed_steps}/${t.total_steps} steps</span>
+                  </div>` : ''}
               </div>
             `;
           }).join('')}
@@ -2415,7 +2416,7 @@ async function refreshKanbanData() {
             archiveTasks.map(t => `
               <div class="kanban-card archived" draggable="true" data-task-id="${t.id}" data-task-status="archived"
                    ondragstart="kanbanDragStart(event, ${t.id})" ondragend="kanbanDragEnd(event)"
-                   onclick="openKanbanTaskEdit(${t.id})">
+                   onclick="openTaskDetail(${t.id})">
                 <div class="kanban-card-top">
                   <div class="kanban-card-title">${escapeHtml(t.title)}</div>
                   <button class="kanban-card-menu-btn" onclick="event.stopPropagation(); kanbanContextMenu(event, ${t.id}, 'archived')" title="Move card">⋮</button>
@@ -2559,16 +2560,202 @@ async function moveKanbanTask(id, newStatus) {
 }
 
 function openKanbanTaskEdit(id) {
-  editingTaskId = id;
-  fetchJSON('/api/tasks?kanban=1').then(tasks => {
-    const task = tasks?.find(t => t.id === id);
-    if (!task) return;
-    document.getElementById('task-modal-name').value = task.title || '';
-    document.getElementById('task-modal-desc').value = task.description || '';
-    document.getElementById('task-modal-priority').value = task.priority || 'normal';
-    document.getElementById('task-modal-category').value = task.category || '';
-    document.getElementById('task-modal').classList.add('visible');
+  openTaskDetail(id);
+}
+
+// ===== TASK DETAIL PANEL =====
+
+let taskDetailId = null;
+
+async function openTaskDetail(id) {
+  taskDetailId = id;
+  const panel = document.getElementById('task-detail-panel');
+  if (!panel) return;
+  panel.classList.add('open');
+  await refreshTaskDetail();
+}
+
+function closeTaskDetail() {
+  const panel = document.getElementById('task-detail-panel');
+  if (panel) panel.classList.remove('open');
+  taskDetailId = null;
+  if (currentView === 'kanban') refreshKanbanData();
+  if (currentView === 'inbox') refreshInboxList();
+}
+
+async function refreshTaskDetail() {
+  if (!taskDetailId) return;
+  const panel = document.getElementById('task-detail-panel');
+  if (!panel) return;
+
+  const [task, steps] = await Promise.all([
+    fetchJSON(`/api/tasks/${taskDetailId}`),
+    fetchJSON(`/api/tasks/${taskDetailId}/steps`)
+  ]);
+
+  if (!task) { closeTaskDetail(); return; }
+
+  const priorityOpts = ['low','normal','high','urgent'].map(p =>
+    `<option value="${p}" ${task.priority === p ? 'selected' : ''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`
+  ).join('');
+
+  const statusOpts = ['inbox','todo','in_progress','done','archived'].map(s =>
+    `<option value="${s}" ${task.status === s ? 'selected' : ''}>${s.replace('_',' ')}</option>`
+  ).join('');
+
+  const stepsList = (steps || []).map(s => `
+    <div class="task-step-item ${s.status === 'done' ? 'done' : ''}" data-step-id="${s.id}">
+      <input type="checkbox" class="task-step-check" ${s.status === 'done' ? 'checked' : ''}
+             onchange="toggleTaskStep(${task.id}, ${s.id}, this.checked)">
+      <span class="task-step-title">${escapeHtml(s.title)}</span>
+      <button class="task-step-delete" onclick="deleteTaskStepItem(${task.id}, ${s.id})" title="Delete step">×</button>
+    </div>
+  `).join('');
+
+  const totalSteps = steps?.length || 0;
+  const doneSteps = steps?.filter(s => s.status === 'done').length || 0;
+  const pct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
+
+  panel.innerHTML = `
+    <div class="task-detail-overlay" onclick="closeTaskDetail()"></div>
+    <div class="task-detail-content">
+      <div class="task-detail-header">
+        <div class="task-detail-status-badge status-${task.status}">${task.status.replace('_',' ')}</div>
+        <button class="task-detail-close" onclick="closeTaskDetail()">×</button>
+      </div>
+
+      <div class="task-detail-body">
+        <input class="task-detail-title" id="td-title" value="${escapeHtml(task.title)}" placeholder="Task title">
+
+        <textarea class="task-detail-desc" id="td-desc" rows="3" placeholder="Add description...">${escapeHtml(task.description || '')}</textarea>
+
+        <div class="task-detail-row">
+          <div class="task-detail-field">
+            <label>Priority</label>
+            <select id="td-priority" class="modal-select" style="font-size:0.8rem;padding:0.3rem 0.5rem">
+              ${priorityOpts}
+            </select>
+          </div>
+          <div class="task-detail-field">
+            <label>Status</label>
+            <select id="td-status" class="modal-select" style="font-size:0.8rem;padding:0.3rem 0.5rem" onchange="changeTaskDetailStatus(${task.id}, this.value)">
+              ${statusOpts}
+            </select>
+          </div>
+          <div class="task-detail-field">
+            <label>Category</label>
+            <input id="td-category" class="modal-input" style="font-size:0.8rem;padding:0.3rem 0.5rem" value="${escapeHtml(task.category || '')}" placeholder="category...">
+          </div>
+        </div>
+
+        ${task.started_at ? `<div class="task-detail-info">Started ${timeAgo(task.started_at)}</div>` : ''}
+
+        <button class="task-detail-save-btn" onclick="saveTaskDetail(${task.id})">Save Changes</button>
+
+        <div class="task-detail-section">
+          <div class="task-detail-section-header">
+            <span>Steps</span>
+            ${totalSteps > 0 ? `<span class="step-count-badge">${doneSteps}/${totalSteps}</span>` : ''}
+          </div>
+          ${totalSteps > 0 ? `
+            <div class="step-progress" style="margin-bottom:0.75rem">
+              <div class="step-progress-bar"><div class="step-progress-fill" style="width:${pct}%"></div></div>
+            </div>` : ''}
+          <div class="task-steps-list" id="td-steps-list">
+            ${stepsList || '<div class="task-steps-empty">No steps yet</div>'}
+          </div>
+          <div class="task-step-add-row">
+            <input type="text" id="td-new-step" class="task-step-input" placeholder="Add a step..." onkeydown="if(event.key==='Enter')addTaskStep(${task.id})">
+            <button class="task-step-add-btn" onclick="addTaskStep(${task.id})">Add</button>
+          </div>
+        </div>
+
+        ${task.status === 'done' ? `
+          <div class="task-detail-section">
+            <div class="task-detail-section-header">Completion Summary</div>
+            <textarea class="task-detail-desc" id="td-completion" rows="2" placeholder="What was accomplished?">${escapeHtml(task.completion_summary || '')}</textarea>
+            <button class="task-detail-save-btn" style="margin-top:0.5rem" onclick="saveCompletionSummary(${task.id})">Save Summary</button>
+          </div>` : ''}
+
+        <div class="task-detail-section">
+          <div class="task-detail-meta-row">
+            <span>Created ${timeAgo(task.created_at)}</span>
+            ${task.completed_at ? `<span>Completed ${timeAgo(task.completed_at)}</span>` : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function saveTaskDetail(id) {
+  const data = {
+    title: document.getElementById('td-title')?.value.trim(),
+    description: document.getElementById('td-desc')?.value.trim() || null,
+    priority: document.getElementById('td-priority')?.value,
+    category: document.getElementById('td-category')?.value.trim() || null
+  };
+  await fetchJSON(`/api/tasks/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
   });
+  await refreshTaskDetail();
+  if (currentView === 'kanban') refreshKanbanData();
+  if (currentView === 'inbox') refreshInboxList();
+}
+
+async function changeTaskDetailStatus(id, newStatus) {
+  await fetchJSON(`/api/tasks/${id}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: newStatus })
+  });
+  taskDetailId = id;
+  await refreshTaskDetail();
+  if (currentView === 'kanban') refreshKanbanData();
+  if (currentView === 'inbox') refreshInboxList();
+}
+
+async function saveCompletionSummary(id) {
+  const summary = document.getElementById('td-completion')?.value.trim() || null;
+  await fetchJSON(`/api/tasks/${id}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'done', completion_summary: summary })
+  });
+  await refreshTaskDetail();
+}
+
+async function toggleTaskStep(taskId, stepId, checked) {
+  await fetchJSON(`/api/tasks/${taskId}/steps/${stepId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: checked ? 'done' : 'pending' })
+  });
+  await refreshTaskDetail();
+  if (currentView === 'kanban') refreshKanbanData();
+}
+
+async function addTaskStep(taskId) {
+  const input = document.getElementById('td-new-step');
+  if (!input) return;
+  const title = input.value.trim();
+  if (!title) return;
+  input.value = '';
+  await fetchJSON(`/api/tasks/${taskId}/steps`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ steps: [{ title }] })
+  });
+  await refreshTaskDetail();
+  if (currentView === 'kanban') refreshKanbanData();
+}
+
+async function deleteTaskStepItem(taskId, stepId) {
+  await fetchJSON(`/api/tasks/${taskId}/steps/${stepId}`, { method: 'DELETE' });
+  await refreshTaskDetail();
+  if (currentView === 'kanban') refreshKanbanData();
 }
 
 // ===== VIEW: PROJECTS (Project Hub) =====
@@ -5442,6 +5629,7 @@ document.addEventListener('keydown', (e) => {
     closeNewCardModal();
     closeTaskModal();
     closeScheduleModal();
+    closeTaskDetail();
   }
 });
 

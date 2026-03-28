@@ -138,8 +138,10 @@ const moveTask = db.prepare(`
   UPDATE tasks SET
     status = @status,
     updated_at = datetime('now'),
+    started_at = CASE WHEN @status = 'in_progress' AND started_at IS NULL THEN datetime('now') ELSE started_at END,
     completed_at = CASE WHEN @status = 'done' THEN datetime('now') ELSE completed_at END,
-    archived_at = CASE WHEN @status = 'archived' THEN datetime('now') ELSE archived_at END
+    archived_at = CASE WHEN @status = 'archived' THEN datetime('now') ELSE archived_at END,
+    completion_summary = CASE WHEN @completion_summary IS NOT NULL THEN @completion_summary ELSE completion_summary END
   WHERE id = @id
 `);
 
@@ -632,6 +634,67 @@ module.exports = {
   deleteAlertByTypeEntity,
   getProjectsForStaleness
 };
+
+// --- Task Steps ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS task_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'pending',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_steps_task ON task_steps(task_id);
+`);
+
+// Migration: add started_at and completion_summary to tasks
+try { db.exec(`ALTER TABLE tasks ADD COLUMN started_at TEXT`); } catch(e) {}
+try { db.exec(`ALTER TABLE tasks ADD COLUMN completion_summary TEXT`); } catch(e) {}
+
+const insertTaskStep = db.prepare(`
+  INSERT INTO task_steps (task_id, title, description, sort_order)
+  VALUES (@task_id, @title, @description, @sort_order)
+`);
+
+const getStepsByTask = db.prepare(`
+  SELECT * FROM task_steps WHERE task_id = @task_id ORDER BY sort_order ASC, id ASC
+`);
+
+const getTaskStepById = db.prepare(`SELECT * FROM task_steps WHERE id = @id`);
+
+const updateTaskStep = db.prepare(`
+  UPDATE task_steps SET
+    title = COALESCE(@title, title),
+    description = COALESCE(@description, description),
+    status = COALESCE(@status, status),
+    sort_order = COALESCE(@sort_order, sort_order),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+
+const deleteTaskStep = db.prepare(`DELETE FROM task_steps WHERE id = @id`);
+const deleteStepsByTask = db.prepare(`DELETE FROM task_steps WHERE task_id = @task_id`);
+
+const getTaskStepCounts = db.prepare(`
+  SELECT task_id,
+    COUNT(*) as total_steps,
+    SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as completed_steps
+  FROM task_steps
+  GROUP BY task_id
+`);
+
+module.exports.insertTaskStep = insertTaskStep;
+module.exports.getStepsByTask = getStepsByTask;
+module.exports.getTaskStepById = getTaskStepById;
+module.exports.updateTaskStep = updateTaskStep;
+module.exports.deleteTaskStep = deleteTaskStep;
+module.exports.deleteStepsByTask = deleteStepsByTask;
+module.exports.getTaskStepCounts = getTaskStepCounts;
 
 // --- Goals ---
 
