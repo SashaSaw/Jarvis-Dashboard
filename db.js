@@ -1280,6 +1280,13 @@ const getVoiceHistory = db.prepare(`
 
 const clearVoiceHistory = db.prepare(`DELETE FROM voice_history`);
 
+// Get the most recent user+assistant exchange for context
+const getLastVoiceExchange = db.prepare(`
+  SELECT role, transcript, chat_text FROM voice_history
+  ORDER BY created_at DESC LIMIT 2
+`);
+
 module.exports.insertVoiceEntry = insertVoiceEntry;
 module.exports.getVoiceHistory = getVoiceHistory;
 module.exports.clearVoiceHistory = clearVoiceHistory;
+module.exports.getLastVoiceExchange = getLastVoiceExchange;

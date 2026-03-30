@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, getLogTotalCount, getLogTodayCount, getLogDailyActivity, getLogTopActionsAll, logDb, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects, insertConcept, getConceptsByProject, getConceptById, updateConcept, deleteConcept, getLearningStats, insertVoiceEntry, getVoiceHistory, clearVoiceHistory } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, getLogTotalCount, getLogTodayCount, getLogDailyActivity, getLogTopActionsAll, logDb, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects, insertConcept, getConceptsByProject, getConceptById, updateConcept, deleteConcept, getLearningStats, insertVoiceEntry, getVoiceHistory, clearVoiceHistory, getLastVoiceExchange } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -2581,8 +2581,27 @@ app.post('/api/voice/message', async (req, res) => {
     const { text } = req.body;
     if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
 
+    // Get last exchange for context (before saving new message)
+    const lastExchange = getLastVoiceExchange.all();
+    // lastExchange comes newest-first: [assistant, user] or fewer
+    const contextMessages = [];
+    const reversed = [...lastExchange].reverse(); // oldest first
+    for (const row of reversed) {
+      if (row.role === 'user' && row.transcript) {
+        contextMessages.push({ role: 'user', content: row.transcript });
+      } else if (row.role === 'assistant' && row.chat_text) {
+        contextMessages.push({ role: 'assistant', content: row.chat_text });
+      }
+    }
+
     // Save user message
     const userResult = insertVoiceEntry.run({ role: 'user', transcript: text.trim(), speech_script: null, chat_text: null });
+
+    // Build messages: context (last exchange) + current message with voice prefix
+    const messages = [
+      ...contextMessages,
+      { role: 'user', content: VOICE_PREFIX + text.trim() }
+    ];
 
     // Call OpenClaw gateway with 90s timeout
     const gwController = new AbortController();
@@ -2597,7 +2616,7 @@ app.post('/api/voice/message', async (req, res) => {
         },
         body: JSON.stringify({
           model: VOICE_MODEL,
-          messages: [{ role: 'user', content: VOICE_PREFIX + text.trim() }],
+          messages,
           stream: true
         }),
         signal: gwController.signal

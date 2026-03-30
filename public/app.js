@@ -7531,6 +7531,7 @@ let voiceThinkingSeconds = 0;
 let voiceMediaRecorder = null;
 let voiceChunks = [];
 let voiceConversation = []; // local cache for display
+let voiceReplayCache = []; // speech scripts indexed for safe replay
 let voiceSelectedVoice = 'Samantha';
 let voiceWhisperEndpoint = 'http://127.0.0.1:8080';
 let voiceWhisperModel = 'tiny';
@@ -7655,6 +7656,7 @@ function voiceRenderConversation() {
     list.innerHTML = '<div class="voice-convo-empty">No messages yet. Press record to start talking.</div>';
     return;
   }
+  voiceReplayCache = []; // reset cache
   list.innerHTML = voiceConversation.map(entry => {
     if (entry.role === 'user') {
       return `
@@ -7665,18 +7667,26 @@ function voiceRenderConversation() {
       `;
     } else {
       const html = voiceRenderMarkdownLite(entry.chat_text || '');
-      const speechEsc = escapeHtml(entry.speech_script || '');
+      const replayIdx = voiceReplayCache.length;
+      voiceReplayCache.push(entry.speech_script || '');
       return `
         <div class="voice-msg voice-msg-assistant">
           <div class="voice-msg-bubble voice-msg-bubble-assistant">${html}</div>
           <div class="voice-msg-actions">
-            <button class="voice-replay-btn" onclick="voiceSpeak(${JSON.stringify(entry.speech_script || '')})">▶ Replay</button>
+            <button class="voice-replay-btn" onclick="voiceReplay(${replayIdx})">▶ Replay</button>
             <span class="voice-msg-time">${timeAgo(entry.created_at)}</span>
           </div>
         </div>
       `;
     }
   }).join('');
+}
+
+function voiceReplay(idx) {
+  const text = voiceReplayCache[idx];
+  if (!text) return;
+  voiceSetState('speaking');
+  voiceSpeak(text, () => voiceSetState('idle'));
 }
 
 function voiceRenderMarkdownLite(text) {
