@@ -7532,9 +7532,27 @@ let voiceMediaRecorder = null;
 let voiceChunks = [];
 let voiceConversation = []; // local cache for display
 let voiceReplayCache = []; // speech scripts indexed for safe replay
-let voiceSelectedVoice = 'Samantha';
+let voiceSelectedVoice = 'af_heart';
 let voiceWhisperEndpoint = 'http://127.0.0.1:8080';
 let voiceWhisperModel = 'tiny';
+let voiceMlxEndpoint = 'http://127.0.0.1:8000';
+let voiceMlxModel = 'mlx-community/Kokoro-82M-bf16';
+let voiceCurrentAudio = null; // currently playing Audio element
+
+// Kokoro voice presets
+const KOKORO_VOICES = [
+  { id: 'af_heart',    label: 'Heart (EN-F)' },
+  { id: 'af_sky',      label: 'Sky (EN-F)' },
+  { id: 'af_bella',    label: 'Bella (EN-F)' },
+  { id: 'af_sarah',    label: 'Sarah (EN-F)' },
+  { id: 'af_nicole',   label: 'Nicole (EN-F)' },
+  { id: 'am_adam',     label: 'Adam (EN-M)' },
+  { id: 'am_michael',  label: 'Michael (EN-M)' },
+  { id: 'bf_emma',     label: 'Emma (EN-GB-F)' },
+  { id: 'bf_isabella', label: 'Isabella (EN-GB-F)' },
+  { id: 'bm_george',   label: 'George (EN-GB-M)' },
+  { id: 'bm_lewis',    label: 'Lewis (EN-GB-M)' },
+];
 
 async function renderVoice(container) {
   container.innerHTML = `
@@ -7546,19 +7564,25 @@ async function renderVoice(container) {
 
       <div class="voice-settings card">
         <div class="voice-settings-row">
-          <label class="voice-settings-label">Whisper endpoint</label>
+          <label class="voice-settings-label">STT (Whisper)</label>
           <input type="text" id="voice-whisper-endpoint" class="modal-input voice-endpoint-input" value="http://127.0.0.1:8080">
         </div>
         <div class="voice-settings-row">
-          <label class="voice-settings-label">Model</label>
+          <label class="voice-settings-label">Whisper model</label>
           <div class="voice-model-pills" id="voice-model-pills">
             <span class="voice-model-pill ${voiceWhisperModel === 'tiny' ? 'active' : ''}" onclick="voiceSelectModel('tiny')">tiny</span>
             <span class="voice-model-pill ${voiceWhisperModel === 'small' ? 'active' : ''}" onclick="voiceSelectModel('small')">small</span>
           </div>
         </div>
         <div class="voice-settings-row">
-          <label class="voice-settings-label">Voice (TTS)</label>
-          <select id="voice-tts-select" class="modal-select voice-tts-select" onchange="voiceSelectedVoice = this.value"></select>
+          <label class="voice-settings-label">TTS (mlx-audio)</label>
+          <input type="text" id="voice-mlx-endpoint" class="modal-input voice-endpoint-input" value="http://127.0.0.1:8000" onchange="voiceMlxEndpoint = this.value.trim()">
+        </div>
+        <div class="voice-settings-row">
+          <label class="voice-settings-label">Voice</label>
+          <select id="voice-tts-select" class="modal-select voice-tts-select" onchange="voiceSelectedVoice = this.value">
+            ${KOKORO_VOICES.map(v => `<option value="${v.id}"${v.id === voiceSelectedVoice ? ' selected' : ''}>${v.label}</option>`).join('')}
+          </select>
         </div>
       </div>
 
@@ -7593,48 +7617,9 @@ async function renderVoice(container) {
 }
 
 function voicePopulateVoices() {
+  // Voices are now Kokoro presets — already rendered in the HTML template, nothing dynamic needed
   const sel = document.getElementById('voice-tts-select');
-  if (!sel) return;
-
-  let lastVoiceCount = 0;
-
-  function populate() {
-    // Show all voices — Siri voices may be non-en-US but still work great
-    const all = speechSynthesis.getVoices();
-    // Prefer English but show everything if no English found
-    const voices = all.filter(v => v.lang.startsWith('en'));
-    const list = voices.length ? voices : all;
-    if (!list.length) return; // not loaded yet
-
-    // Only re-render if voice list actually changed
-    if (list.length === lastVoiceCount) return;
-    lastVoiceCount = list.length;
-
-    const prev = sel.value;
-    sel.innerHTML = '';
-    list.forEach(v => {
-      const opt = document.createElement('option');
-      opt.value = v.name;
-      // Mark local/premium voices
-      opt.textContent = v.localService ? v.name : `${v.name} ↗`;
-      sel.appendChild(opt);
-    });
-
-    // Restore previous selection, or pick a good default
-    const preferred = ['Samantha', 'Alex', 'Daniel', 'Karen', 'Moira'];
-    const best = preferred.map(n => list.find(v => v.name === n)).find(Boolean);
-    const restored = prev ? list.find(v => v.name === prev) : null;
-    const chosen = restored || best || list[0];
-    if (chosen) { sel.value = chosen.name; voiceSelectedVoice = chosen.name; }
-  }
-
-  // Poll for voices — Siri/premium voices can arrive late and fire voiceschanged multiple times
-  populate();
-  speechSynthesis.addEventListener('voiceschanged', populate);
-  // Also try after short delays for slow-loading premium voices
-  setTimeout(populate, 500);
-  setTimeout(populate, 1500);
-  setTimeout(populate, 3000);
+  if (sel) sel.value = voiceSelectedVoice;
 }
 
 async function voiceLoadHistory() {
@@ -7967,39 +7952,52 @@ async function voiceHandleRecordingStop() {
   }
 }
 
-let voiceSpeakSession = 0; // incremented on each new speak call to detect stale callbacks
+let voiceSpeakSession = 0;
 
-function voiceSpeak(text, onEnd) {
+async function voiceSpeak(text, onEnd) {
   if (!text) { if (onEnd) onEnd(); return; }
-  speechSynthesis.cancel();
 
-  const session = ++voiceSpeakSession; // capture current session id
+  // Stop any currently playing audio
+  if (voiceCurrentAudio) { voiceCurrentAudio.pause(); voiceCurrentAudio = null; }
 
-  const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
-  const chunks = sentences.filter(s => s.trim().length > 0);
-  if (chunks.length === 0) { if (onEnd) onEnd(); return; }
+  const session = ++voiceSpeakSession;
+  const endpoint = (document.getElementById('voice-mlx-endpoint')?.value || voiceMlxEndpoint).trim();
 
-  const voices = speechSynthesis.getVoices();
-  const voice = voices.find(v => v.name === voiceSelectedVoice);
+  try {
+    const res = await fetch(`${endpoint}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: voiceMlxModel,
+        input: text,
+        voice: voiceSelectedVoice,
+        response_format: 'wav'
+      })
+    });
 
-  let index = 0;
-  function speakNext() {
-    // If a newer speak() call has started, abandon this chain silently
-    if (session !== voiceSpeakSession) return;
-    if (index >= chunks.length) { if (onEnd) onEnd(); return; }
-    const utterance = new SpeechSynthesisUtterance(chunks[index++].trim());
-    if (voice) utterance.voice = voice;
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    utterance.onend = speakNext;
-    utterance.onerror = (e) => {
-      // 'interrupted' means we were cancelled — don't advance chain or call onEnd
-      if (e.error === 'interrupted' || e.error === 'canceled') return;
-      speakNext(); // skip genuinely broken chunks
+    if (!res.ok) throw new Error(`mlx-audio TTS error: ${res.status}`);
+    if (session !== voiceSpeakSession) return; // newer call started
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    voiceCurrentAudio = audio;
+
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      voiceCurrentAudio = null;
+      if (session === voiceSpeakSession && onEnd) onEnd();
     };
-    speechSynthesis.speak(utterance);
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      voiceCurrentAudio = null;
+      if (session === voiceSpeakSession && onEnd) onEnd();
+    };
+    audio.play();
+  } catch (e) {
+    console.warn('mlx-audio TTS failed:', e.message);
+    if (session === voiceSpeakSession && onEnd) onEnd();
   }
-  speakNext();
 }
 
 async function voiceClearHistory() {
