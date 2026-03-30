@@ -7881,14 +7881,28 @@ async function voiceHandleRecordingStop() {
 function voiceSpeak(text, onEnd) {
   if (!text) { if (onEnd) onEnd(); return; }
   speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
+
+  // Split into sentences — browsers (especially Firefox/Chrome) cut off
+  // long single utterances. Speaking sentence-by-sentence is reliable.
+  const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
+  const chunks = sentences.filter(s => s.trim().length > 0);
+  if (chunks.length === 0) { if (onEnd) onEnd(); return; }
+
   const voices = speechSynthesis.getVoices();
   const voice = voices.find(v => v.name === voiceSelectedVoice);
-  if (voice) utterance.voice = voice;
-  utterance.rate = 1.0;
-  utterance.pitch = 1.0;
-  if (onEnd) utterance.onend = onEnd;
-  speechSynthesis.speak(utterance);
+
+  let index = 0;
+  function speakNext() {
+    if (index >= chunks.length) { if (onEnd) onEnd(); return; }
+    const utterance = new SpeechSynthesisUtterance(chunks[index++].trim());
+    if (voice) utterance.voice = voice;
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.onend = speakNext;
+    utterance.onerror = speakNext; // skip broken chunks, keep going
+    speechSynthesis.speak(utterance);
+  }
+  speakNext();
 }
 
 async function voiceClearHistory() {
