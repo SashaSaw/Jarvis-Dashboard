@@ -2584,19 +2584,30 @@ app.post('/api/voice/message', async (req, res) => {
     // Save user message
     const userResult = insertVoiceEntry.run({ role: 'user', transcript: text.trim(), speech_script: null, chat_text: null });
 
-    // Call OpenClaw gateway
-    const gwRes = await fetch(VOICE_GATEWAY, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${VOICE_BEARER}`
-      },
-      body: JSON.stringify({
-        model: VOICE_MODEL,
-        messages: [{ role: 'user', content: VOICE_PREFIX + text.trim() }],
-        stream: false
-      })
-    });
+    // Call OpenClaw gateway with 90s timeout
+    const gwController = new AbortController();
+    const gwTimeout = setTimeout(() => gwController.abort(), 90000);
+    let gwRes;
+    try {
+      gwRes = await fetch(VOICE_GATEWAY, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${VOICE_BEARER}`
+        },
+        body: JSON.stringify({
+          model: VOICE_MODEL,
+          messages: [{ role: 'user', content: VOICE_PREFIX + text.trim() }],
+          stream: false
+        }),
+        signal: gwController.signal
+      });
+    } catch (fetchErr) {
+      clearTimeout(gwTimeout);
+      const msg = fetchErr.name === 'AbortError' ? 'Gateway timed out after 90s' : `Gateway unreachable: ${fetchErr.message}`;
+      return res.status(504).json({ error: msg });
+    }
+    clearTimeout(gwTimeout);
 
     if (!gwRes.ok) {
       const errText = await gwRes.text();
