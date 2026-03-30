@@ -2577,6 +2577,7 @@ Same information but formatted for reading on screen. Use ## headers and bullet 
 User said: `;
 
 app.post('/api/voice/message', async (req, res) => {
+  req.setTimeout(200000); res.setTimeout(200000); // 3.3 min — outlasts gateway timeout
   try {
     const { text } = req.body;
     if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
@@ -2603,9 +2604,9 @@ app.post('/api/voice/message', async (req, res) => {
       { role: 'user', content: VOICE_PREFIX + text.trim() }
     ];
 
-    // Call OpenClaw gateway with 90s timeout
+    // Call OpenClaw gateway — non-streaming, 3 min timeout
     const gwController = new AbortController();
-    const gwTimeout = setTimeout(() => gwController.abort(), 90000);
+    const gwTimeout = setTimeout(() => gwController.abort(), 180000);
     let gwRes;
     try {
       gwRes = await fetch(VOICE_GATEWAY, {
@@ -2617,13 +2618,13 @@ app.post('/api/voice/message', async (req, res) => {
         body: JSON.stringify({
           model: VOICE_MODEL,
           messages,
-          stream: true
+          stream: false
         }),
         signal: gwController.signal
       });
     } catch (fetchErr) {
       clearTimeout(gwTimeout);
-      const msg = fetchErr.name === 'AbortError' ? 'Gateway timed out after 90s' : `Gateway unreachable: ${fetchErr.message}`;
+      const msg = fetchErr.name === 'AbortError' ? 'Gateway timed out after 3 minutes' : `Gateway unreachable: ${fetchErr.message}`;
       return res.status(504).json({ error: msg });
     }
     clearTimeout(gwTimeout);
@@ -2633,24 +2634,8 @@ app.post('/api/voice/message', async (req, res) => {
       return res.status(502).json({ error: `Gateway error ${gwRes.status}: ${errText.slice(0, 200)}` });
     }
 
-    // Collect SSE stream into full content string
-    let content = '';
-    const reader = gwRes.body;
-    let buf = '';
-    for await (const chunk of reader) {
-      buf += chunk.toString();
-      const lines = buf.split('\n');
-      buf = lines.pop(); // keep incomplete line
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        if (data === '[DONE]') break;
-        try {
-          const parsed = JSON.parse(data);
-          content += parsed.choices?.[0]?.delta?.content || '';
-        } catch {}
-      }
-    }
+    const gwData = await gwRes.json();
+    const content = gwData.choices?.[0]?.message?.content || '';
 
     // Parse [SPEECH]...[/SPEECH] and [CHAT]...[/CHAT]
     const speechMatch = content.match(/\[SPEECH\]([\s\S]*?)\[\/SPEECH\]/i);

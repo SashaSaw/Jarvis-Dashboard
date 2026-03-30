@@ -7683,6 +7683,8 @@ function voiceRenderConversation() {
 }
 
 function voiceReplay(idx) {
+  // Don't interrupt an in-progress transcription or thinking cycle
+  if (voiceState === 'transcribing' || voiceState === 'thinking') return;
   const text = voiceReplayCache[idx];
   if (!text) return;
   voiceSetState('speaking');
@@ -7965,12 +7967,14 @@ async function voiceHandleRecordingStop() {
   }
 }
 
+let voiceSpeakSession = 0; // incremented on each new speak call to detect stale callbacks
+
 function voiceSpeak(text, onEnd) {
   if (!text) { if (onEnd) onEnd(); return; }
   speechSynthesis.cancel();
 
-  // Split into sentences — browsers (especially Firefox/Chrome) cut off
-  // long single utterances. Speaking sentence-by-sentence is reliable.
+  const session = ++voiceSpeakSession; // capture current session id
+
   const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
   const chunks = sentences.filter(s => s.trim().length > 0);
   if (chunks.length === 0) { if (onEnd) onEnd(); return; }
@@ -7980,13 +7984,19 @@ function voiceSpeak(text, onEnd) {
 
   let index = 0;
   function speakNext() {
+    // If a newer speak() call has started, abandon this chain silently
+    if (session !== voiceSpeakSession) return;
     if (index >= chunks.length) { if (onEnd) onEnd(); return; }
     const utterance = new SpeechSynthesisUtterance(chunks[index++].trim());
     if (voice) utterance.voice = voice;
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     utterance.onend = speakNext;
-    utterance.onerror = speakNext; // skip broken chunks, keep going
+    utterance.onerror = (e) => {
+      // 'interrupted' means we were cancelled — don't advance chain or call onEnd
+      if (e.error === 'interrupted' || e.error === 'canceled') return;
+      speakNext(); // skip genuinely broken chunks
+    };
     speechSynthesis.speak(utterance);
   }
   speakNext();
