@@ -7840,10 +7840,28 @@ function voiceSelectModel(model) {
   voiceWhisperModel = model;
   const pills = document.querySelectorAll('#voice-model-pills .voice-model-pill');
   pills.forEach(p => p.classList.toggle('active', p.textContent.trim() === model));
-  // Update endpoint port: tiny=8080, small=8081
-  const portMap = { tiny: 8080, small: 8081 };
   const ep = document.getElementById('voice-whisper-endpoint');
-  if (ep) ep.value = `http://127.0.0.1:${portMap[model] || 8080}`;
+  if (ep) ep.value = `http://127.0.0.1:8080`;
+  // Show a toast with the command to run
+  const modelFile = model === 'small' ? 'whisper-small.en.bin' : 'whisper-tiny.en.bin';
+  const cmd = `whisper-server -m ~/${modelFile} --port 8080 --host 127.0.0.1`;
+  voiceShowModelPrompt(cmd);
+}
+
+function voiceShowModelPrompt(cmd) {
+  let toast = document.getElementById('voice-model-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'voice-model-toast';
+    toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px 16px;z-index:9999;max-width:520px;font-size:0.82rem;box-shadow:0 4px 20px rgba(0,0,0,0.4)';
+    document.body.appendChild(toast);
+  }
+  toast.innerHTML = `<div style="color:var(--text-muted);margin-bottom:6px">Restart whisper-server with this command:</div>
+    <code style="display:block;background:var(--bg);padding:8px;border-radius:4px;color:var(--text-primary);word-break:break-all">${cmd}</code>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <button onclick="navigator.clipboard.writeText('${cmd}');this.textContent='Copied!'" style="background:var(--blue);border:none;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.78rem">Copy</button>
+      <button onclick="this.closest('#voice-model-toast').remove()" style="background:none;border:1px solid var(--border);color:var(--text-muted);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.78rem">Dismiss</button>
+    </div>`;
 }
 
 async function voiceHandleRecordingStop() {
@@ -7891,15 +7909,27 @@ async function voiceHandleRecordingStop() {
     voiceSetState('thinking');
 
     // Send to Jarvis
-    const jarvisRes = await fetch('/api/voice/message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: transcript })
-    });
+    const jarvisController = new AbortController();
+    const jarvisTimeout = setTimeout(() => jarvisController.abort(), 120000); // 2 min timeout
+    let jarvisRes;
+    try {
+      jarvisRes = await fetch('/api/voice/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: transcript }),
+        signal: jarvisController.signal
+      });
+    } catch (fetchErr) {
+      clearTimeout(jarvisTimeout);
+      voiceSetError(fetchErr.name === 'AbortError' ? 'Timed out after 2 minutes.' : 'Connection lost. Is the dashboard reachable?');
+      return;
+    }
+    clearTimeout(jarvisTimeout);
 
     if (!jarvisRes.ok) {
-      const err = await jarvisRes.json();
-      voiceSetError('Jarvis error: ' + (err.error || jarvisRes.status));
+      let errMsg = jarvisRes.status;
+      try { const e = await jarvisRes.json(); errMsg = e.error || errMsg; } catch {}
+      voiceSetError('Jarvis error: ' + errMsg);
       return;
     }
 
