@@ -2598,7 +2598,7 @@ app.post('/api/voice/message', async (req, res) => {
         body: JSON.stringify({
           model: VOICE_MODEL,
           messages: [{ role: 'user', content: VOICE_PREFIX + text.trim() }],
-          stream: false
+          stream: true
         }),
         signal: gwController.signal
       });
@@ -2614,8 +2614,24 @@ app.post('/api/voice/message', async (req, res) => {
       return res.status(502).json({ error: `Gateway error ${gwRes.status}: ${errText.slice(0, 200)}` });
     }
 
-    const gwData = await gwRes.json();
-    const content = gwData.choices?.[0]?.message?.content || '';
+    // Collect SSE stream into full content string
+    let content = '';
+    const reader = gwRes.body;
+    let buf = '';
+    for await (const chunk of reader) {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop(); // keep incomplete line
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(data);
+          content += parsed.choices?.[0]?.delta?.content || '';
+        } catch {}
+      }
+    }
 
     // Parse [SPEECH]...[/SPEECH] and [CHAT]...[/CHAT]
     const speechMatch = content.match(/\[SPEECH\]([\s\S]*?)\[\/SPEECH\]/i);
