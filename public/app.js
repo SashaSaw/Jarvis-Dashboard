@@ -7760,9 +7760,52 @@ function voiceStopRecording() {
   voiceSetState('transcribing');
 }
 
+// Convert AudioBuffer to WAV Blob (16-bit PCM, mono, 16kHz)
+function audioBufferToWav(buffer) {
+  const sampleRate = 16000;
+  const numChannels = 1;
+  const ctx = new OfflineAudioContext(numChannels, buffer.duration * sampleRate, sampleRate);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  src.start();
+  return ctx.startRendering().then(rendered => {
+    const pcm = rendered.getChannelData(0);
+    const wavBuffer = new ArrayBuffer(44 + pcm.length * 2);
+    const view = new DataView(wavBuffer);
+    const write = (offset, val, size) => size === 4 ? view.setUint32(offset, val, true) : size === 2 ? view.setUint16(offset, val, true) : view.setUint8(offset, val);
+    // RIFF header
+    [82,73,70,70].forEach((b,i) => write(i, b, 1));
+    write(4, 36 + pcm.length * 2, 4);
+    [87,65,86,69,102,109,116,32].forEach((b,i) => write(8+i, b, 1));
+    write(16, 16, 4); write(20, 1, 2); write(22, numChannels, 2);
+    write(24, sampleRate, 4); write(28, sampleRate * 2, 4);
+    write(32, 2, 2); write(34, 16, 2);
+    [100,97,116,97].forEach((b,i) => write(36+i, b, 1));
+    write(40, pcm.length * 2, 4);
+    for (let i = 0; i < pcm.length; i++) {
+      view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7FFF, true);
+    }
+    return new Blob([wavBuffer], { type: 'audio/wav' });
+  });
+}
+
 async function voiceHandleRecordingStop() {
   const endpoint = (document.getElementById('voice-whisper-endpoint')?.value || voiceWhisperEndpoint).trim();
-  const blob = new Blob(voiceChunks, { type: 'audio/webm' });
+  const rawBlob = new Blob(voiceChunks, { type: 'audio/webm' });
+
+  // Convert webm → WAV (16kHz mono PCM) before sending to whisper
+  let blob;
+  try {
+    const arrayBuf = await rawBlob.arrayBuffer();
+    const audioCtx = new AudioContext();
+    const decoded = await audioCtx.decodeAudioData(arrayBuf);
+    await audioCtx.close();
+    blob = await audioBufferToWav(decoded);
+  } catch (e) {
+    // Fallback: send raw and hope whisper handles it
+    blob = rawBlob;
+  }
 
   // Transcribe
   try {
