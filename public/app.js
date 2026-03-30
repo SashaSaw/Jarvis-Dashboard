@@ -7550,9 +7550,9 @@ async function renderVoice(container) {
         </div>
         <div class="voice-settings-row">
           <label class="voice-settings-label">Model</label>
-          <div class="voice-model-pills">
-            <span class="voice-model-pill active">tiny</span>
-            <span class="voice-model-pill">small</span>
+          <div class="voice-model-pills" id="voice-model-pills">
+            <span class="voice-model-pill ${voiceWhisperModel === 'tiny' ? 'active' : ''}" onclick="voiceSelectModel('tiny')">tiny</span>
+            <span class="voice-model-pill ${voiceWhisperModel === 'small' ? 'active' : ''}" onclick="voiceSelectModel('small')">small</span>
           </div>
         </div>
         <div class="voice-settings-row">
@@ -7595,31 +7595,45 @@ function voicePopulateVoices() {
   const sel = document.getElementById('voice-tts-select');
   if (!sel) return;
 
+  let lastVoiceCount = 0;
+
   function populate() {
-    const voices = speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
+    // Show all voices — Siri voices may be non-en-US but still work great
+    const all = speechSynthesis.getVoices();
+    // Prefer English but show everything if no English found
+    const voices = all.filter(v => v.lang.startsWith('en'));
+    const list = voices.length ? voices : all;
+    if (!list.length) return; // not loaded yet
+
+    // Only re-render if voice list actually changed
+    if (list.length === lastVoiceCount) return;
+    lastVoiceCount = list.length;
+
+    const prev = sel.value;
     sel.innerHTML = '';
-    if (!voices.length) {
-      sel.innerHTML = '<option value="">No voices found</option>';
-      return;
-    }
-    voices.forEach(v => {
+    list.forEach(v => {
       const opt = document.createElement('option');
       opt.value = v.name;
-      opt.textContent = v.name;
-      if (v.name === 'Samantha') opt.selected = true;
+      // Mark local/premium voices
+      opt.textContent = v.localService ? v.name : `${v.name} ↗`;
       sel.appendChild(opt);
     });
-    // Default: Samantha, or first
-    const samantha = voices.find(v => v.name === 'Samantha');
-    voiceSelectedVoice = samantha ? 'Samantha' : (voices[0]?.name || '');
-    sel.value = voiceSelectedVoice;
+
+    // Restore previous selection, or pick a good default
+    const preferred = ['Samantha', 'Alex', 'Daniel', 'Karen', 'Moira'];
+    const best = preferred.map(n => list.find(v => v.name === n)).find(Boolean);
+    const restored = prev ? list.find(v => v.name === prev) : null;
+    const chosen = restored || best || list[0];
+    if (chosen) { sel.value = chosen.name; voiceSelectedVoice = chosen.name; }
   }
 
-  if (speechSynthesis.getVoices().length) {
-    populate();
-  } else {
-    speechSynthesis.addEventListener('voiceschanged', populate, { once: true });
-  }
+  // Poll for voices — Siri/premium voices can arrive late and fire voiceschanged multiple times
+  populate();
+  speechSynthesis.addEventListener('voiceschanged', populate);
+  // Also try after short delays for slow-loading premium voices
+  setTimeout(populate, 500);
+  setTimeout(populate, 1500);
+  setTimeout(populate, 3000);
 }
 
 async function voiceLoadHistory() {
@@ -7822,6 +7836,16 @@ async function convertBlobToWav(blob) {
   return encodePcmToWav(rendered.getChannelData(0), targetRate);
 }
 
+function voiceSelectModel(model) {
+  voiceWhisperModel = model;
+  const pills = document.querySelectorAll('#voice-model-pills .voice-model-pill');
+  pills.forEach(p => p.classList.toggle('active', p.textContent.trim() === model));
+  // Update endpoint port: tiny=8080, small=8081
+  const portMap = { tiny: 8080, small: 8081 };
+  const ep = document.getElementById('voice-whisper-endpoint');
+  if (ep) ep.value = `http://127.0.0.1:${portMap[model] || 8080}`;
+}
+
 async function voiceHandleRecordingStop() {
   const endpoint = (document.getElementById('voice-whisper-endpoint')?.value || voiceWhisperEndpoint).trim();
   const rawBlob = new Blob(voiceChunks, { type: 'audio/webm' });
@@ -7892,7 +7916,9 @@ async function voiceHandleRecordingStop() {
 
   } catch (e) {
     if (e.message.includes('fetch') || e.message.includes('unreachable') || e.message.includes('Failed to fetch')) {
-      voiceSetError('Whisper server offline. Start it with: whisper-server -m ~/whisper-tiny.en.bin --port 8080 --host 127.0.0.1');
+      const modelFile = voiceWhisperModel === 'small' ? 'whisper-small.en.bin' : 'whisper-tiny.en.bin';
+      const modelPort = voiceWhisperModel === 'small' ? 8081 : 8080;
+      voiceSetError(`Whisper server offline. Start it with: whisper-server -m ~/${modelFile} --port ${modelPort} --host 127.0.0.1`);
     } else {
       voiceSetError('Error: ' + e.message);
     }
