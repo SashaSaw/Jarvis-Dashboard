@@ -1254,3 +1254,32 @@ if (usageCount.c === 0) {
 
 module.exports.insertApiUsage = insertApiUsage;
 module.exports.getApiUsage = getApiUsage;
+
+// --- Voice History ---
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS voice_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,
+    transcript TEXT,
+    speech_script TEXT,
+    chat_text TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_voice_history_created ON voice_history(created_at);
+`);
+
+const insertVoiceEntry = db.prepare(`
+  INSERT INTO voice_history (role, transcript, speech_script, chat_text)
+  VALUES (@role, @transcript, @speech_script, @chat_text)
+`);
+
+const getVoiceHistory = db.prepare(`
+  SELECT * FROM voice_history ORDER BY created_at DESC LIMIT 50
+`);
+
+const clearVoiceHistory = db.prepare(`DELETE FROM voice_history`);
+
+module.exports.insertVoiceEntry = insertVoiceEntry;
+module.exports.getVoiceHistory = getVoiceHistory;
+module.exports.clearVoiceHistory = clearVoiceHistory;

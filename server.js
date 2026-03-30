@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, getLogTotalCount, getLogTodayCount, getLogDailyActivity, getLogTopActionsAll, logDb, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects, insertConcept, getConceptsByProject, getConceptById, updateConcept, deleteConcept, getLearningStats } = require('./db');
+const { insertEvent, getEvents, getStats, getActiveSessions, upsertAgentStatus, getAgentStatus, insertTask, getTasks, getTasksByStatuses, getTaskById, updateTask, deleteTask, moveTask, insertSchedule, getScheduleByDate, getScheduleByRange, getScheduleById, updateSchedule, deleteSchedule, insertDocument, getDocuments, getDocumentById, updateDocument, deleteDocument, insertLogEntry, getLogEntries, getLogStats, getLogTopActions, getLogTotalCount, getLogTodayCount, getLogDailyActivity, getLogTopActionsAll, logDb, insertProject, getProjects, getProjectById, updateProject, archiveProject, deleteProjectPermanent, deleteProjectSections, deleteProjectFeatures, deleteProjectTags, deleteProjectFeedback, insertSection, getSectionsByProject, getSectionById, updateSection, deleteSection, insertFeature, getFeaturesByProject, getFeatureById, updateFeature, deleteFeature, insertProjectTag, getTagsByProject, getProjectTagById, updateProjectTag, deleteProjectTag, insertFeedback, getFeedbackByProject, getFeedbackById, updateFeedback, deleteFeedback, getChatMessages, getChatMessagesAfter, insertChatMessage, getChatPending, markChatAnswered, touchProjectActivity, getActiveAlerts, getAlertById, dismissAlert, upsertAlert, deleteAlertByTypeEntity, getProjectsForStaleness, insertGoal, getGoalsByDate, getGoalById, updateGoal, deleteGoal, insertGoalStep, getStepsByGoal, updateGoalStep, deleteGoalStep, deleteStepsByGoal, getGoalsAfter, insertTaskStep, getStepsByTask, getTaskStepById, updateTaskStep, deleteTaskStep, deleteStepsByTask, getTaskStepCounts, insertApiUsage, getApiUsage, upsertEvaluation, getEvaluationByProject, updateProjectPipelineStage, getPipelineProjects, insertConcept, getConceptsByProject, getConceptById, updateConcept, deleteConcept, getLearningStats, insertVoiceEntry, getVoiceHistory, clearVoiceHistory } = require('./db');
 const { getAllBoards, createCard, moveCard, archiveCard, updateCard, getBoardLabels } = require('./integrations/trello');
 const { getTodayEvents, getUpcomingEvents } = require('./integrations/calendar');
 
@@ -2553,6 +2553,87 @@ app.post('/api/projects/:id/evaluate', (req, res) => {
     });
     const evaluation = getEvaluationByProject.get({ project_id: req.params.id });
     res.json(evaluation);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Voice ---
+
+const VOICE_GATEWAY = 'http://localhost:18789/v1/chat/completions';
+const VOICE_BEARER = 'ef8f71054b1b8f911e517661fa600f7ca125c7ef290edeac';
+const VOICE_MODEL = 'openclaw:main';
+
+const VOICE_PREFIX = `[VOICE MODE] Respond in exactly this two-section format with no other text outside these tags:
+
+[SPEECH]
+Write a natural, conversational response as if speaking aloud. No markdown, no bullet points, no headers. Use "you" and "I". Short sentences. Friendly but direct. Max 150 words. This will be read by a text-to-speech engine.
+[/SPEECH]
+
+[CHAT]
+Same information but formatted for reading on screen. Use ## headers and bullet points. Be concise. Structured and scannable.
+[/CHAT]
+
+User said: `;
+
+app.post('/api/voice/message', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
+
+    // Save user message
+    const userResult = insertVoiceEntry.run({ role: 'user', transcript: text.trim(), speech_script: null, chat_text: null });
+
+    // Call OpenClaw gateway
+    const gwRes = await fetch(VOICE_GATEWAY, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${VOICE_BEARER}`
+      },
+      body: JSON.stringify({
+        model: VOICE_MODEL,
+        messages: [{ role: 'user', content: VOICE_PREFIX + text.trim() }],
+        stream: false
+      })
+    });
+
+    if (!gwRes.ok) {
+      const errText = await gwRes.text();
+      return res.status(502).json({ error: `Gateway error ${gwRes.status}: ${errText.slice(0, 200)}` });
+    }
+
+    const gwData = await gwRes.json();
+    const content = gwData.choices?.[0]?.message?.content || '';
+
+    // Parse [SPEECH]...[/SPEECH] and [CHAT]...[/CHAT]
+    const speechMatch = content.match(/\[SPEECH\]([\s\S]*?)\[\/SPEECH\]/i);
+    const chatMatch = content.match(/\[CHAT\]([\s\S]*?)\[\/CHAT\]/i);
+    const speech_script = speechMatch ? speechMatch[1].trim() : content.trim();
+    const chat_text = chatMatch ? chatMatch[1].trim() : content.trim();
+
+    // Save assistant response
+    const assistantResult = insertVoiceEntry.run({ role: 'assistant', transcript: null, speech_script, chat_text });
+
+    res.json({ speech_script, chat_text, id: assistantResult.lastInsertRowid });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/voice/history', (req, res) => {
+  try {
+    const rows = getVoiceHistory.all();
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/voice/history', (req, res) => {
+  try {
+    clearVoiceHistory.run();
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

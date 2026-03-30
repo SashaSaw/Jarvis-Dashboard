@@ -264,6 +264,7 @@ function route() {
     case 'finance': renderFinance(main); break;
     case 'usage': renderUsage(main); break;
     case 'log': renderLog(main); break;
+    case 'voice': renderVoice(main); break;
     default: renderHome(main); break;
   }
 }
@@ -7520,4 +7521,336 @@ function renderUsageTable(rows) {
       <td class="usage-project">${r.project ? escapeHtml(r.project) : '<span class="usage-na">—</span>'}</td>
     </tr>
   `).join('');
+}
+
+// ===== VOICE TAB =====
+
+let voiceState = 'idle'; // idle | recording | transcribing | thinking | speaking
+let voiceMediaRecorder = null;
+let voiceChunks = [];
+let voiceConversation = []; // local cache for display
+let voiceSelectedVoice = 'Samantha';
+let voiceWhisperEndpoint = 'http://127.0.0.1:8080';
+
+async function renderVoice(container) {
+  container.innerHTML = `
+    <div class="voice-page">
+      <div class="voice-header">
+        <h2 class="voice-title">🎙️ Voice</h2>
+        <button class="btn-ghost voice-clear-btn" onclick="voiceClearHistory()">Clear</button>
+      </div>
+
+      <div class="voice-settings card">
+        <div class="voice-settings-row">
+          <label class="voice-settings-label">Whisper endpoint</label>
+          <input type="text" id="voice-whisper-endpoint" class="modal-input voice-endpoint-input" value="http://127.0.0.1:8080">
+        </div>
+        <div class="voice-settings-row">
+          <label class="voice-settings-label">Model</label>
+          <div class="voice-model-pills">
+            <span class="voice-model-pill active">tiny</span>
+            <span class="voice-model-pill">small</span>
+          </div>
+        </div>
+        <div class="voice-settings-row">
+          <label class="voice-settings-label">Voice (TTS)</label>
+          <select id="voice-tts-select" class="modal-select voice-tts-select" onchange="voiceSelectedVoice = this.value"></select>
+        </div>
+      </div>
+
+      <div class="voice-recorder card">
+        <button class="voice-record-btn" id="voice-record-btn" onclick="voiceToggleRecord()">
+          <span class="voice-record-icon">🎙️</span>
+          <span class="voice-record-label" id="voice-record-label">Hold to Record</span>
+        </button>
+        <div class="voice-status-row">
+          <span class="voice-status-dot" id="voice-status-dot"></span>
+          <span class="voice-status-text" id="voice-status-text">Idle</span>
+        </div>
+        <div class="voice-transcript-row" id="voice-transcript-row" style="display:none">
+          <span class="voice-transcript-label">Transcript:</span>
+          <span class="voice-transcript-text" id="voice-transcript-text"></span>
+        </div>
+      </div>
+
+      <div class="voice-convo-section">
+        <div class="voice-convo-header">
+          <span class="voice-convo-divider-label">Conversation</span>
+        </div>
+        <div class="voice-convo-list" id="voice-convo-list">
+          <div class="voice-convo-empty">No messages yet. Press record to start talking.</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  voicePopulateVoices();
+  await voiceLoadHistory();
+}
+
+function voicePopulateVoices() {
+  const sel = document.getElementById('voice-tts-select');
+  if (!sel) return;
+
+  function populate() {
+    const voices = speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
+    sel.innerHTML = '';
+    if (!voices.length) {
+      sel.innerHTML = '<option value="">No voices found</option>';
+      return;
+    }
+    voices.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.name;
+      opt.textContent = v.name;
+      if (v.name === 'Samantha') opt.selected = true;
+      sel.appendChild(opt);
+    });
+    // Default: Samantha, or first
+    const samantha = voices.find(v => v.name === 'Samantha');
+    voiceSelectedVoice = samantha ? 'Samantha' : (voices[0]?.name || '');
+    sel.value = voiceSelectedVoice;
+  }
+
+  if (speechSynthesis.getVoices().length) {
+    populate();
+  } else {
+    speechSynthesis.addEventListener('voiceschanged', populate, { once: true });
+  }
+}
+
+async function voiceLoadHistory() {
+  try {
+    const rows = await fetchJSON('/api/voice/history');
+    if (!Array.isArray(rows)) return;
+    // History comes back newest first; display newest first
+    voiceConversation = rows;
+    voiceRenderConversation();
+  } catch (e) {
+    console.error('Failed to load voice history', e);
+  }
+}
+
+function voiceRenderConversation() {
+  const list = document.getElementById('voice-convo-list');
+  if (!list) return;
+  if (!voiceConversation.length) {
+    list.innerHTML = '<div class="voice-convo-empty">No messages yet. Press record to start talking.</div>';
+    return;
+  }
+  list.innerHTML = voiceConversation.map(entry => {
+    if (entry.role === 'user') {
+      return `
+        <div class="voice-msg voice-msg-user">
+          <div class="voice-msg-bubble voice-msg-bubble-user">${escapeHtml(entry.transcript || '')}</div>
+          <div class="voice-msg-time">${timeAgo(entry.created_at)}</div>
+        </div>
+      `;
+    } else {
+      const html = voiceRenderMarkdownLite(entry.chat_text || '');
+      const speechEsc = escapeHtml(entry.speech_script || '');
+      return `
+        <div class="voice-msg voice-msg-assistant">
+          <div class="voice-msg-bubble voice-msg-bubble-assistant">${html}</div>
+          <div class="voice-msg-actions">
+            <button class="voice-replay-btn" onclick="voiceSpeak(${JSON.stringify(entry.speech_script || '')})">▶ Replay</button>
+            <span class="voice-msg-time">${timeAgo(entry.created_at)}</span>
+          </div>
+        </div>
+      `;
+    }
+  }).join('');
+}
+
+function voiceRenderMarkdownLite(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^## (.+)$/gm, '<h3 class="voice-md-h3">$1</h3>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
+    .replace(/\n\n+/g, '</p><p>')
+    .replace(/^(?!<[hul])(.+)$/gm, (m, p1) => p1.startsWith('<') ? m : `<p>${m}</p>`);
+}
+
+function voiceSetState(state) {
+  voiceState = state;
+  const btn = document.getElementById('voice-record-btn');
+  const label = document.getElementById('voice-record-label');
+  const dot = document.getElementById('voice-status-dot');
+  const statusText = document.getElementById('voice-status-text');
+  if (!btn) return;
+
+  btn.className = 'voice-record-btn';
+  dot.className = 'voice-status-dot';
+
+  switch (state) {
+    case 'idle':
+      label.textContent = 'Hold to Record';
+      statusText.textContent = 'Idle';
+      dot.classList.add('voice-dot-idle');
+      break;
+    case 'recording':
+      btn.classList.add('voice-record-btn-active');
+      label.textContent = 'Recording...';
+      statusText.textContent = '● REC';
+      dot.classList.add('voice-dot-recording');
+      break;
+    case 'transcribing':
+      btn.classList.add('voice-record-btn-busy');
+      label.textContent = 'Transcribing...';
+      statusText.textContent = 'Transcribing...';
+      dot.classList.add('voice-dot-busy');
+      break;
+    case 'thinking':
+      btn.classList.add('voice-record-btn-busy');
+      label.textContent = 'Thinking...';
+      statusText.textContent = 'Thinking...';
+      dot.classList.add('voice-dot-busy');
+      break;
+    case 'speaking':
+      btn.classList.add('voice-record-btn-speaking');
+      label.textContent = 'Speaking...';
+      statusText.textContent = 'Speaking...';
+      dot.classList.add('voice-dot-speaking');
+      break;
+  }
+}
+
+function voiceSetError(msg) {
+  voiceSetState('idle');
+  const statusText = document.getElementById('voice-status-text');
+  if (statusText) statusText.textContent = msg;
+  const dot = document.getElementById('voice-status-dot');
+  if (dot) { dot.className = 'voice-status-dot voice-dot-error'; }
+}
+
+async function voiceToggleRecord() {
+  if (voiceState === 'idle') {
+    await voiceStartRecording();
+  } else if (voiceState === 'recording') {
+    voiceStopRecording();
+  }
+}
+
+async function voiceStartRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceChunks = [];
+    voiceMediaRecorder = new MediaRecorder(stream);
+    voiceMediaRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
+    voiceMediaRecorder.onstop = voiceHandleRecordingStop;
+    voiceMediaRecorder.start();
+    voiceSetState('recording');
+  } catch (e) {
+    if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+      voiceSetError('Microphone permission denied. Please allow access in your browser.');
+    } else {
+      voiceSetError('Mic error: ' + e.message);
+    }
+  }
+}
+
+function voiceStopRecording() {
+  if (voiceMediaRecorder && voiceMediaRecorder.state !== 'inactive') {
+    voiceMediaRecorder.stop();
+    voiceMediaRecorder.stream.getTracks().forEach(t => t.stop());
+  }
+  voiceSetState('transcribing');
+}
+
+async function voiceHandleRecordingStop() {
+  const endpoint = (document.getElementById('voice-whisper-endpoint')?.value || voiceWhisperEndpoint).trim();
+  const blob = new Blob(voiceChunks, { type: 'audio/webm' });
+
+  // Transcribe
+  try {
+    const formData = new FormData();
+    formData.append('file', blob, 'audio.wav');
+
+    const whisperRes = await fetch(`${endpoint}/inference`, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!whisperRes.ok) {
+      if (whisperRes.status === 0 || !whisperRes.status) throw new Error('unreachable');
+      throw new Error(`Whisper returned ${whisperRes.status}`);
+    }
+
+    const whisperData = await whisperRes.json();
+    const transcript = (whisperData.text || '').trim();
+
+    if (!transcript) {
+      voiceSetError('No speech detected. Try again.');
+      return;
+    }
+
+    // Show transcript
+    const transcriptRow = document.getElementById('voice-transcript-row');
+    const transcriptEl = document.getElementById('voice-transcript-text');
+    if (transcriptRow) transcriptRow.style.display = 'flex';
+    if (transcriptEl) transcriptEl.textContent = transcript;
+
+    voiceSetState('thinking');
+
+    // Send to Jarvis
+    const jarvisRes = await fetch('/api/voice/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: transcript })
+    });
+
+    if (!jarvisRes.ok) {
+      const err = await jarvisRes.json();
+      voiceSetError('Jarvis error: ' + (err.error || jarvisRes.status));
+      return;
+    }
+
+    const { speech_script, chat_text } = await jarvisRes.json();
+
+    // Prepend to conversation
+    voiceConversation.unshift({ role: 'assistant', chat_text, speech_script, created_at: new Date().toISOString() });
+    voiceConversation.unshift({ role: 'user', transcript, created_at: new Date().toISOString() });
+    voiceRenderConversation();
+
+    // Speak
+    voiceSetState('speaking');
+    voiceSpeak(speech_script, () => voiceSetState('idle'));
+
+  } catch (e) {
+    if (e.message.includes('fetch') || e.message.includes('unreachable') || e.message.includes('Failed to fetch')) {
+      voiceSetError('Whisper server offline. Start it with: whisper-server -m ~/whisper-tiny.en.bin --port 8080 --host 127.0.0.1');
+    } else {
+      voiceSetError('Error: ' + e.message);
+    }
+  }
+}
+
+function voiceSpeak(text, onEnd) {
+  if (!text) { if (onEnd) onEnd(); return; }
+  speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voices = speechSynthesis.getVoices();
+  const voice = voices.find(v => v.name === voiceSelectedVoice);
+  if (voice) utterance.voice = voice;
+  utterance.rate = 1.0;
+  utterance.pitch = 1.0;
+  if (onEnd) utterance.onend = onEnd;
+  speechSynthesis.speak(utterance);
+}
+
+async function voiceClearHistory() {
+  if (!confirm('Clear all voice history?')) return;
+  try {
+    await fetch('/api/voice/history', { method: 'DELETE' });
+    voiceConversation = [];
+    voiceRenderConversation();
+    const transcriptRow = document.getElementById('voice-transcript-row');
+    if (transcriptRow) transcriptRow.style.display = 'none';
+    voiceSetState('idle');
+  } catch (e) {
+    console.error('Failed to clear voice history', e);
+  }
 }
