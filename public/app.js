@@ -7526,11 +7526,14 @@ function renderUsageTable(rows) {
 // ===== VOICE TAB =====
 
 let voiceState = 'idle'; // idle | recording | transcribing | thinking | speaking
+let voiceThinkingTimer = null;
+let voiceThinkingSeconds = 0;
 let voiceMediaRecorder = null;
 let voiceChunks = [];
 let voiceConversation = []; // local cache for display
 let voiceSelectedVoice = 'Samantha';
 let voiceWhisperEndpoint = 'http://127.0.0.1:8080';
+let voiceWhisperModel = 'tiny';
 
 async function renderVoice(container) {
   container.innerHTML = `
@@ -7685,6 +7688,13 @@ function voiceSetState(state) {
   btn.className = 'voice-record-btn';
   dot.className = 'voice-status-dot';
 
+  // Clear thinking ticker whenever state changes away from thinking
+  if (state !== 'thinking') {
+    clearInterval(voiceThinkingTimer);
+    voiceThinkingTimer = null;
+    voiceThinkingSeconds = 0;
+  }
+
   switch (state) {
     case 'idle':
       label.textContent = 'Hold to Record';
@@ -7708,6 +7718,17 @@ function voiceSetState(state) {
       label.textContent = 'Thinking...';
       statusText.textContent = 'Thinking...';
       dot.classList.add('voice-dot-busy');
+      // Start 30s status ticker
+      voiceThinkingSeconds = 0;
+      clearInterval(voiceThinkingTimer);
+      voiceThinkingTimer = setInterval(() => {
+        voiceThinkingSeconds += 30;
+        const mins = Math.floor(voiceThinkingSeconds / 60);
+        const secs = voiceThinkingSeconds % 60;
+        const elapsed = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+        const el = document.getElementById('voice-status-text');
+        if (el) el.textContent = `Still thinking... (${elapsed})`;
+      }, 30000);
       break;
     case 'speaking':
       btn.classList.add('voice-record-btn-speaking');
