@@ -97,9 +97,6 @@
         <a class="nav-link" href="#log" data-view="log">
           <span class="nav-icon">📜</span> Log
         </a>
-        <a class="nav-link" href="#voice" data-view="voice">
-          <span class="nav-icon">🎙️</span> Voice
-        </a>
       </nav>
 
       <div class="sidebar-footer">
@@ -111,6 +108,61 @@
     <main class="main-content" id="main-content">
       <div class="loading"><div class="spinner"></div> Loading...</div>
     </main>
+
+    <!-- Jarvis Chat Panel -->
+    <div id="jarvis-panel" class="jarvis-panel">
+      <div class="jarvis-panel-header">
+        <span class="jarvis-panel-title">🐶 Jarvis</span>
+        <div class="jarvis-panel-actions">
+          <button onclick="jpClearHistory()" title="Clear history" class="jarvis-panel-action-btn">🗑</button>
+          <button onclick="jarvisPanelToggleSettings()" title="Settings" class="jarvis-panel-action-btn">⚙️</button>
+          <button onclick="jarvisCollapsePanel()" title="Collapse" class="jarvis-panel-action-btn">→</button>
+        </div>
+      </div>
+
+      <!-- Inline settings (collapsed by default) -->
+      <div id="jarvis-panel-settings" class="jarvis-panel-settings" style="display:none">
+        <div class="jarvis-setting-row">
+          <label>STT endpoint</label>
+          <input id="jp-whisper-ep" value="http://127.0.0.1:8080" onchange="jpWhisperEndpoint=this.value.trim()">
+        </div>
+        <div class="jarvis-setting-row">
+          <label>Whisper model</label>
+          <div class="voice-model-pills" id="jp-model-pills">
+            <span class="voice-model-pill active" onclick="jpSelectWhisperModel('tiny',this)">tiny</span>
+            <span class="voice-model-pill" onclick="jpSelectWhisperModel('small',this)">small</span>
+          </div>
+        </div>
+        <div class="jarvis-setting-row">
+          <label>TTS endpoint</label>
+          <input id="jp-mlx-ep" value="http://127.0.0.1:8000" onchange="jpMlxEndpoint=this.value.trim()">
+        </div>
+        <div class="jarvis-setting-row">
+          <label>Voice</label>
+          <select id="jp-voice-select" onchange="jpSelectedVoice=this.value"></select>
+        </div>
+      </div>
+
+      <!-- Conversation history -->
+      <div id="jarvis-history" class="jarvis-history"></div>
+
+      <!-- Pending attachments preview -->
+      <div id="jarvis-pending" class="jarvis-pending"></div>
+
+      <!-- Composer -->
+      <div class="jarvis-composer">
+        <div class="jarvis-composer-toolbar">
+          <button id="jp-mic-btn" onclick="jpToggleMic()" title="Voice input">🎙️</button>
+          <button onclick="jpOpenImagePicker()" title="Attach image">📎</button>
+          <input type="file" id="jp-image-input" accept="image/*" multiple style="display:none" onchange="jpHandleImages(this)">
+        </div>
+        <div class="jarvis-composer-input-row">
+          <textarea id="jp-text" class="jarvis-composer-textarea" placeholder="Message Jarvis..." rows="2" onkeydown="jpHandleKey(event)"></textarea>
+          <button id="jp-send-btn" class="jarvis-send-btn" onclick="jpSend()">▶</button>
+        </div>
+        <div id="jp-status" class="jarvis-status-bar"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Card Detail Modal (Trello) -->
@@ -391,6 +443,9 @@
       <div class="diagram-fullscreen-body" id="diagram-fullscreen-body"></div>
     </div>
   </div>
+
+  <!-- Collapsed toggle button -->
+  <button id="jarvis-panel-toggle" class="jarvis-panel-open-btn" onclick="jarvisExpandPanel()" style="display:none" title="Open Jarvis Chat">🐶</button>
 
   <script src="/app.js?v=20260328f"></script>
 </body>

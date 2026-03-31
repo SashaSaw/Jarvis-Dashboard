@@ -264,7 +264,6 @@ function route() {
     case 'finance': renderFinance(main); break;
     case 'usage': renderUsage(main); break;
     case 'log': renderLog(main); break;
-    case 'voice': renderVoice(main); break;
     default: renderHome(main); break;
   }
 }
@@ -6680,6 +6679,7 @@ async function periodicRefresh() {
 
 window.addEventListener('hashchange', route);
 route();
+jarvisInitPanel();
 refreshAgentSidebar();
 updateTimestamp();
 
@@ -7523,21 +7523,7 @@ function renderUsageTable(rows) {
   `).join('');
 }
 
-// ===== VOICE TAB =====
-
-let voiceState = 'idle'; // idle | recording | transcribing | thinking | speaking
-let voiceThinkingTimer = null;
-let voiceThinkingSeconds = 0;
-let voiceMediaRecorder = null;
-let voiceChunks = [];
-let voiceConversation = []; // local cache for display
-let voiceReplayCache = []; // speech scripts indexed for safe replay
-let voiceSelectedVoice = 'af_heart';
-let voiceWhisperEndpoint = 'http://127.0.0.1:8080';
-let voiceWhisperModel = 'tiny';
-let voiceMlxEndpoint = 'http://127.0.0.1:8000';
-let voiceMlxModel = 'mlx-community/Kokoro-82M-bf16';
-let voiceCurrentAudio = null; // currently playing Audio element
+// ===== SHARED AUDIO UTILS =====
 
 // Kokoro voice presets
 const KOKORO_VOICES = [
@@ -7553,244 +7539,6 @@ const KOKORO_VOICES = [
   { id: 'bm_george',   label: 'George (EN-GB-M)' },
   { id: 'bm_lewis',    label: 'Lewis (EN-GB-M)' },
 ];
-
-async function renderVoice(container) {
-  container.innerHTML = `
-    <div class="voice-page">
-      <div class="voice-header">
-        <h2 class="voice-title">🎙️ Voice</h2>
-        <button class="btn-ghost voice-clear-btn" onclick="voiceClearHistory()">Clear</button>
-      </div>
-
-      <div class="voice-settings card">
-        <div class="voice-settings-row">
-          <label class="voice-settings-label">STT (Whisper)</label>
-          <input type="text" id="voice-whisper-endpoint" class="modal-input voice-endpoint-input" value="http://127.0.0.1:8080">
-        </div>
-        <div class="voice-settings-row">
-          <label class="voice-settings-label">Whisper model</label>
-          <div class="voice-model-pills" id="voice-model-pills">
-            <span class="voice-model-pill ${voiceWhisperModel === 'tiny' ? 'active' : ''}" onclick="voiceSelectModel('tiny')">tiny</span>
-            <span class="voice-model-pill ${voiceWhisperModel === 'small' ? 'active' : ''}" onclick="voiceSelectModel('small')">small</span>
-          </div>
-        </div>
-        <div class="voice-settings-row">
-          <label class="voice-settings-label">TTS (mlx-audio)</label>
-          <input type="text" id="voice-mlx-endpoint" class="modal-input voice-endpoint-input" value="http://127.0.0.1:8000" onchange="voiceMlxEndpoint = this.value.trim()">
-        </div>
-        <div class="voice-settings-row">
-          <label class="voice-settings-label">Voice</label>
-          <select id="voice-tts-select" class="modal-select voice-tts-select" onchange="voiceSelectedVoice = this.value">
-            ${KOKORO_VOICES.map(v => `<option value="${v.id}"${v.id === voiceSelectedVoice ? ' selected' : ''}>${v.label}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-
-      <div class="voice-recorder card">
-        <button class="voice-record-btn" id="voice-record-btn" onclick="voiceToggleRecord()">
-          <span class="voice-record-icon">🎙️</span>
-          <span class="voice-record-label" id="voice-record-label">Hold to Record</span>
-        </button>
-        <div class="voice-status-row">
-          <span class="voice-status-dot" id="voice-status-dot"></span>
-          <span class="voice-status-text" id="voice-status-text">Idle</span>
-        </div>
-        <div class="voice-transcript-row" id="voice-transcript-row" style="display:none">
-          <span class="voice-transcript-label">Transcript:</span>
-          <span class="voice-transcript-text" id="voice-transcript-text"></span>
-        </div>
-      </div>
-
-      <div class="voice-convo-section">
-        <div class="voice-convo-header">
-          <span class="voice-convo-divider-label">Conversation</span>
-        </div>
-        <div class="voice-convo-list" id="voice-convo-list">
-          <div class="voice-convo-empty">No messages yet. Press record to start talking.</div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  voicePopulateVoices();
-  await voiceLoadHistory();
-}
-
-function voicePopulateVoices() {
-  // Voices are now Kokoro presets — already rendered in the HTML template, nothing dynamic needed
-  const sel = document.getElementById('voice-tts-select');
-  if (sel) sel.value = voiceSelectedVoice;
-}
-
-async function voiceLoadHistory() {
-  try {
-    const rows = await fetchJSON('/api/voice/history');
-    if (!Array.isArray(rows)) return;
-    // History comes back newest first; display newest first
-    voiceConversation = rows;
-    voiceRenderConversation();
-  } catch (e) {
-    console.error('Failed to load voice history', e);
-  }
-}
-
-function voiceRenderConversation() {
-  const list = document.getElementById('voice-convo-list');
-  if (!list) return;
-  if (!voiceConversation.length) {
-    list.innerHTML = '<div class="voice-convo-empty">No messages yet. Press record to start talking.</div>';
-    return;
-  }
-  voiceReplayCache = []; // reset cache
-  list.innerHTML = voiceConversation.map(entry => {
-    if (entry.role === 'user') {
-      return `
-        <div class="voice-msg voice-msg-user">
-          <div class="voice-msg-bubble voice-msg-bubble-user">${escapeHtml(entry.transcript || '')}</div>
-          <div class="voice-msg-time">${timeAgo(entry.created_at)}</div>
-        </div>
-      `;
-    } else {
-      const html = voiceRenderMarkdownLite(entry.chat_text || '');
-      const replayIdx = voiceReplayCache.length;
-      voiceReplayCache.push(entry.speech_script || '');
-      return `
-        <div class="voice-msg voice-msg-assistant">
-          <div class="voice-msg-bubble voice-msg-bubble-assistant">${html}</div>
-          <div class="voice-msg-actions">
-            <button class="voice-replay-btn" onclick="voiceReplay(${replayIdx})">▶ Replay</button>
-            <span class="voice-msg-time">${timeAgo(entry.created_at)}</span>
-          </div>
-        </div>
-      `;
-    }
-  }).join('');
-}
-
-function voiceReplay(idx) {
-  // Don't interrupt an in-progress transcription or thinking cycle
-  if (voiceState === 'transcribing' || voiceState === 'thinking') return;
-  const text = voiceReplayCache[idx];
-  if (!text) return;
-  voiceSetState('speaking');
-  voiceSpeak(text, () => voiceSetState('idle'));
-}
-
-function voiceRenderMarkdownLite(text) {
-  if (!text) return '';
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^## (.+)$/gm, '<h3 class="voice-md-h3">$1</h3>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
-    .replace(/\n\n+/g, '</p><p>')
-    .replace(/^(?!<[hul])(.+)$/gm, (m, p1) => p1.startsWith('<') ? m : `<p>${m}</p>`);
-}
-
-function voiceSetState(state) {
-  voiceState = state;
-  const btn = document.getElementById('voice-record-btn');
-  const label = document.getElementById('voice-record-label');
-  const dot = document.getElementById('voice-status-dot');
-  const statusText = document.getElementById('voice-status-text');
-  if (!btn) return;
-
-  btn.className = 'voice-record-btn';
-  dot.className = 'voice-status-dot';
-
-  // Clear thinking ticker whenever state changes away from thinking
-  if (state !== 'thinking') {
-    clearInterval(voiceThinkingTimer);
-    voiceThinkingTimer = null;
-    voiceThinkingSeconds = 0;
-  }
-
-  switch (state) {
-    case 'idle':
-      label.textContent = 'Hold to Record';
-      statusText.textContent = 'Idle';
-      dot.classList.add('voice-dot-idle');
-      break;
-    case 'recording':
-      btn.classList.add('voice-record-btn-active');
-      label.textContent = 'Recording...';
-      statusText.textContent = '● REC';
-      dot.classList.add('voice-dot-recording');
-      break;
-    case 'transcribing':
-      btn.classList.add('voice-record-btn-busy');
-      label.textContent = 'Transcribing...';
-      statusText.textContent = 'Transcribing...';
-      dot.classList.add('voice-dot-busy');
-      break;
-    case 'thinking':
-      btn.classList.add('voice-record-btn-busy');
-      label.textContent = 'Thinking...';
-      statusText.textContent = 'Thinking...';
-      dot.classList.add('voice-dot-busy');
-      // Start 30s status ticker
-      voiceThinkingSeconds = 0;
-      clearInterval(voiceThinkingTimer);
-      voiceThinkingTimer = setInterval(() => {
-        voiceThinkingSeconds += 30;
-        const mins = Math.floor(voiceThinkingSeconds / 60);
-        const secs = voiceThinkingSeconds % 60;
-        const elapsed = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-        const el = document.getElementById('voice-status-text');
-        if (el) el.textContent = `Still thinking... (${elapsed})`;
-      }, 30000);
-      break;
-    case 'speaking':
-      btn.classList.add('voice-record-btn-speaking');
-      label.textContent = 'Speaking...';
-      statusText.textContent = 'Speaking...';
-      dot.classList.add('voice-dot-speaking');
-      break;
-  }
-}
-
-function voiceSetError(msg) {
-  voiceSetState('idle');
-  const statusText = document.getElementById('voice-status-text');
-  if (statusText) statusText.textContent = msg;
-  const dot = document.getElementById('voice-status-dot');
-  if (dot) { dot.className = 'voice-status-dot voice-dot-error'; }
-}
-
-async function voiceToggleRecord() {
-  if (voiceState === 'idle') {
-    await voiceStartRecording();
-  } else if (voiceState === 'recording') {
-    voiceStopRecording();
-  }
-}
-
-async function voiceStartRecording() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    voiceChunks = [];
-    voiceMediaRecorder = new MediaRecorder(stream);
-    voiceMediaRecorder.ondataavailable = e => { if (e.data.size > 0) voiceChunks.push(e.data); };
-    voiceMediaRecorder.onstop = voiceHandleRecordingStop;
-    voiceMediaRecorder.start();
-    voiceSetState('recording');
-  } catch (e) {
-    if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-      voiceSetError('Microphone permission denied. Please allow access in your browser.');
-    } else {
-      voiceSetError('Mic error: ' + e.message);
-    }
-  }
-}
-
-function voiceStopRecording() {
-  if (voiceMediaRecorder && voiceMediaRecorder.state !== 'inactive') {
-    voiceMediaRecorder.stop();
-    voiceMediaRecorder.stream.getTracks().forEach(t => t.stop());
-  }
-  voiceSetState('transcribing');
-}
 
 // Encode Float32 PCM samples as a 16-bit mono WAV Blob
 function encodePcmToWav(samples, sampleRate) {
@@ -7833,183 +7581,418 @@ async function convertBlobToWav(blob) {
   return encodePcmToWav(rendered.getChannelData(0), targetRate);
 }
 
-function voiceSelectModel(model) {
-  voiceWhisperModel = model;
-  const pills = document.querySelectorAll('#voice-model-pills .voice-model-pill');
-  pills.forEach(p => p.classList.toggle('active', p.textContent.trim() === model));
-  const ep = document.getElementById('voice-whisper-endpoint');
-  if (ep) ep.value = `http://127.0.0.1:8080`;
-  // Show a toast with the command to run
-  const modelFile = model === 'small' ? 'whisper-small.en.bin' : 'whisper-tiny.en.bin';
-  const cmd = `whisper-server -m ~/${modelFile} --port 8080 --host 127.0.0.1`;
-  voiceShowModelPrompt(cmd);
-}
+// ===== JARVIS CHAT PANEL =====
 
-function voiceShowModelPrompt(cmd) {
-  let toast = document.getElementById('voice-model-toast');
-  if (!toast) {
-    toast = document.createElement('div');
-    toast.id = 'voice-model-toast';
-    toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px 16px;z-index:9999;max-width:520px;font-size:0.82rem;box-shadow:0 4px 20px rgba(0,0,0,0.4)';
-    document.body.appendChild(toast);
+let jpState = 'idle'; // idle | recording | transcribing | thinking | speaking
+let jpMediaRecorder = null;
+let jpChunks = [];
+let jpPendingImages = []; // array of { dataUrl, name }
+let jpPendingVoice = ''; // transcribed text staged before send
+let jpWhisperEndpoint = 'http://127.0.0.1:8080';
+let jpMlxEndpoint = 'http://127.0.0.1:8000';
+let jpSelectedVoice = 'af_heart';
+let jpWhisperModel = 'tiny';
+let jpConversation = []; // local cache
+let jpCurrentAudio = null;
+let jpSpeakSession = 0;
+let jpReplayCache = []; // speech_scripts for replay buttons
+
+function jarvisInitPanel() {
+  // Populate voice dropdown
+  const sel = document.getElementById('jp-voice-select');
+  if (sel) {
+    sel.innerHTML = KOKORO_VOICES.map(v =>
+      `<option value="${v.id}"${v.id === jpSelectedVoice ? ' selected' : ''}>${v.label}</option>`
+    ).join('');
   }
-  toast.innerHTML = `<div style="color:var(--text-muted);margin-bottom:6px">Restart whisper-server with this command:</div>
-    <code style="display:block;background:var(--bg);padding:8px;border-radius:4px;color:var(--text-primary);word-break:break-all">${cmd}</code>
-    <div style="margin-top:8px;display:flex;gap:8px">
-      <button onclick="navigator.clipboard.writeText('${cmd}');this.textContent='Copied!'" style="background:var(--blue);border:none;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.78rem">Copy</button>
-      <button onclick="this.closest('#voice-model-toast').remove()" style="background:none;border:1px solid var(--border);color:var(--text-muted);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.78rem">Dismiss</button>
-    </div>`;
+
+  // Restore collapsed state
+  const collapsed = localStorage.getItem('jarvis-panel-collapsed') === 'true';
+  if (collapsed) {
+    document.getElementById('jarvis-panel').classList.add('collapsed');
+    document.getElementById('jarvis-panel-toggle').style.display = '';
+  }
+
+  // On mobile, default to collapsed if not explicitly set
+  if (window.innerWidth <= 768 && localStorage.getItem('jarvis-panel-collapsed') === null) {
+    document.getElementById('jarvis-panel').classList.add('collapsed');
+    document.getElementById('jarvis-panel-toggle').style.display = '';
+  }
+
+  // Make main-content area flex-shrink correctly
+  const main = document.getElementById('main-content');
+  if (main) main.classList.add('main-content-area');
+
+  jpLoadHistory();
 }
 
-async function voiceHandleRecordingStop() {
-  const endpoint = (document.getElementById('voice-whisper-endpoint')?.value || voiceWhisperEndpoint).trim();
-  const rawBlob = new Blob(voiceChunks, { type: 'audio/webm' });
+function jarvisPanelToggleSettings() {
+  const s = document.getElementById('jarvis-panel-settings');
+  if (!s) return;
+  s.style.display = s.style.display === 'none' ? '' : 'none';
+}
 
-  // Convert webm → 16kHz mono WAV before sending to whisper
+function jarvisCollapsePanel() {
+  document.getElementById('jarvis-panel').classList.add('collapsed');
+  document.getElementById('jarvis-panel-toggle').style.display = '';
+  localStorage.setItem('jarvis-panel-collapsed', 'true');
+}
+
+function jarvisExpandPanel() {
+  document.getElementById('jarvis-panel').classList.remove('collapsed');
+  document.getElementById('jarvis-panel-toggle').style.display = 'none';
+  localStorage.setItem('jarvis-panel-collapsed', 'false');
+}
+
+function jpSelectWhisperModel(model, el) {
+  jpWhisperModel = model;
+  document.querySelectorAll('#jp-model-pills .voice-model-pill').forEach(p =>
+    p.classList.toggle('active', p.textContent.trim() === model)
+  );
+}
+
+async function jpLoadHistory() {
+  try {
+    const rows = await fetchJSON('/api/voice/history');
+    if (!Array.isArray(rows)) return;
+    jpConversation = rows;
+    jpRenderHistory();
+  } catch (e) {
+    console.error('Failed to load Jarvis history', e);
+  }
+}
+
+function jpRenderHistory() {
+  const el = document.getElementById('jarvis-history');
+  if (!el) return;
+  jpReplayCache = [];
+  if (!jpConversation.length) {
+    el.innerHTML = '<div class="jarvis-history-empty">No messages yet. Say hello!</div>';
+    return;
+  }
+
+  // History is newest-first; render oldest-first for chat feel
+  const ordered = [...jpConversation].reverse();
+  el.innerHTML = ordered.map(entry => {
+    if (entry.role === 'user') {
+      const imagesHtml = jpRenderHistoryImages(entry.images);
+      const voicePrefix = entry.transcript ? '' : '';
+      return `
+        <div class="jarvis-msg-user">
+          ${imagesHtml}
+          <div>${escapeHtml(entry.transcript || '')}</div>
+        </div>`;
+    } else {
+      const html = jpRenderMarkdown(entry.chat_text || '');
+      const idx = jpReplayCache.length;
+      jpReplayCache.push(entry.speech_script || '');
+      return `
+        <div class="jarvis-msg-assistant">
+          ${html}
+          <div class="jarvis-msg-assistant-actions">
+            <button class="voice-replay-btn" onclick="jpReplay(${idx})">▶ Replay</button>
+          </div>
+        </div>`;
+    }
+  }).join('');
+
+  // Auto-scroll to bottom
+  el.scrollTop = el.scrollHeight;
+}
+
+function jpRenderHistoryImages(imagesJson) {
+  if (!imagesJson) return '';
+  let imgs;
+  try { imgs = typeof imagesJson === 'string' ? JSON.parse(imagesJson) : imagesJson; } catch { return ''; }
+  if (!Array.isArray(imgs) || !imgs.length) return '';
+  return `<div class="jarvis-msg-images">${imgs.map(url =>
+    `<img src="${escapeHtml(url)}" class="jarvis-msg-thumb" alt="attachment">`
+  ).join('')}</div>`;
+}
+
+function jpRenderMarkdown(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
+    .replace(/\n\n+/g, '</p><p>')
+    .replace(/^(?!<[hul])(.+)$/gm, (m, p1) => p1.startsWith('<') ? m : `<p>${m}</p>`);
+}
+
+function jpReplay(idx) {
+  if (jpState === 'transcribing' || jpState === 'thinking') return;
+  const text = jpReplayCache[idx];
+  if (!text) return;
+  jpSetState('speaking');
+  jpSpeak(text, () => jpSetState('idle'));
+}
+
+function jpSetState(state) {
+  jpState = state;
+  const micBtn = document.getElementById('jp-mic-btn');
+  const sendBtn = document.getElementById('jp-send-btn');
+  const statusEl = document.getElementById('jp-status');
+
+  if (micBtn) {
+    micBtn.classList.toggle('active', state === 'recording');
+  }
+  if (sendBtn) {
+    sendBtn.disabled = (state === 'thinking' || state === 'transcribing');
+  }
+
+  const statusMap = {
+    idle: '',
+    recording: '● Recording...',
+    transcribing: 'Transcribing...',
+    thinking: 'Thinking...',
+    speaking: 'Speaking...'
+  };
+  if (statusEl) statusEl.textContent = statusMap[state] || '';
+}
+
+function jpSetStatus(msg) {
+  const el = document.getElementById('jp-status');
+  if (el) el.textContent = msg;
+}
+
+async function jpToggleMic() {
+  if (jpState === 'idle') {
+    await jpStartRecording();
+  } else if (jpState === 'recording') {
+    jpStopRecording();
+  }
+}
+
+async function jpStartRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    jpChunks = [];
+    jpMediaRecorder = new MediaRecorder(stream);
+    jpMediaRecorder.ondataavailable = e => { if (e.data.size > 0) jpChunks.push(e.data); };
+    jpMediaRecorder.onstop = jpHandleRecordingStop;
+    jpMediaRecorder.start();
+    jpSetState('recording');
+  } catch (e) {
+    jpSetStatus(e.name === 'NotAllowedError' ? 'Microphone permission denied.' : 'Mic error: ' + e.message);
+  }
+}
+
+function jpStopRecording() {
+  if (jpMediaRecorder && jpMediaRecorder.state !== 'inactive') {
+    jpMediaRecorder.stop();
+    jpMediaRecorder.stream.getTracks().forEach(t => t.stop());
+  }
+  jpSetState('transcribing');
+}
+
+async function jpHandleRecordingStop() {
+  const endpoint = jpWhisperEndpoint.trim();
+  const rawBlob = new Blob(jpChunks, { type: 'audio/webm' });
   let blob;
   try {
     blob = await convertBlobToWav(rawBlob);
   } catch (e) {
-    console.warn('WAV conversion failed, sending raw:', e);
     blob = rawBlob;
   }
 
-  // Transcribe
   try {
     const formData = new FormData();
     formData.append('file', blob, 'audio.wav');
-
-    const whisperRes = await fetch(`${endpoint}/inference`, {
-      method: 'POST',
-      body: formData
-    });
-
-    if (!whisperRes.ok) {
-      if (whisperRes.status === 0 || !whisperRes.status) throw new Error('unreachable');
-      throw new Error(`Whisper returned ${whisperRes.status}`);
-    }
-
-    const whisperData = await whisperRes.json();
-    const transcript = (whisperData.text || '').trim();
-
+    const res = await fetch(`${endpoint}/inference`, { method: 'POST', body: formData });
+    if (!res.ok) throw new Error(`Whisper returned ${res.status}`);
+    const data = await res.json();
+    const transcript = (data.text || '').trim();
     if (!transcript) {
-      voiceSetError('No speech detected. Try again.');
+      jpSetState('idle');
+      jpSetStatus('No speech detected.');
       return;
     }
-
-    // Show transcript
-    const transcriptRow = document.getElementById('voice-transcript-row');
-    const transcriptEl = document.getElementById('voice-transcript-text');
-    if (transcriptRow) transcriptRow.style.display = 'flex';
-    if (transcriptEl) transcriptEl.textContent = transcript;
-
-    voiceSetState('thinking');
-
-    // Send to Jarvis
-    const jarvisController = new AbortController();
-    const jarvisTimeout = setTimeout(() => jarvisController.abort(), 120000); // 2 min timeout
-    let jarvisRes;
-    try {
-      jarvisRes = await fetch('/api/voice/message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: transcript }),
-        signal: jarvisController.signal
-      });
-    } catch (fetchErr) {
-      clearTimeout(jarvisTimeout);
-      voiceSetError(fetchErr.name === 'AbortError' ? 'Timed out after 2 minutes.' : 'Connection lost. Is the dashboard reachable?');
-      return;
-    }
-    clearTimeout(jarvisTimeout);
-
-    if (!jarvisRes.ok) {
-      let errMsg = jarvisRes.status;
-      try { const e = await jarvisRes.json(); errMsg = e.error || errMsg; } catch {}
-      voiceSetError('Jarvis error: ' + errMsg);
-      return;
-    }
-
-    const { speech_script, chat_text } = await jarvisRes.json();
-
-    // Prepend to conversation
-    voiceConversation.unshift({ role: 'assistant', chat_text, speech_script, created_at: new Date().toISOString() });
-    voiceConversation.unshift({ role: 'user', transcript, created_at: new Date().toISOString() });
-    voiceRenderConversation();
-
-    // Speak
-    voiceSetState('speaking');
-    voiceSpeak(speech_script, () => voiceSetState('idle'));
-
+    jpPendingVoice = jpPendingVoice ? jpPendingVoice + ' ' + transcript : transcript;
+    jpSetState('idle');
+    jpRenderPending();
   } catch (e) {
-    if (e.message.includes('fetch') || e.message.includes('unreachable') || e.message.includes('Failed to fetch')) {
-      const modelFile = voiceWhisperModel === 'small' ? 'whisper-small.en.bin' : 'whisper-tiny.en.bin';
-      const modelPort = voiceWhisperModel === 'small' ? 8081 : 8080;
-      voiceSetError(`Whisper server offline. Start it with: whisper-server -m ~/${modelFile} --port ${modelPort} --host 127.0.0.1`);
-    } else {
-      voiceSetError('Error: ' + e.message);
-    }
+    jpSetState('idle');
+    const modelFile = jpWhisperModel === 'small' ? 'whisper-small.en.bin' : 'whisper-tiny.en.bin';
+    jpSetStatus(`Whisper offline. Start: whisper-server -m ~/${modelFile} --port 8080`);
   }
 }
 
-let voiceSpeakSession = 0;
+function jpOpenImagePicker() {
+  document.getElementById('jp-image-input').click();
+}
 
-async function voiceSpeak(text, onEnd) {
+async function jpHandleImages(input) {
+  const files = Array.from(input.files);
+  for (const file of files) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    jpPendingImages.push({ dataUrl, name: file.name });
+  }
+  input.value = '';
+  jpRenderPending();
+}
+
+function jpRemoveImage(idx) {
+  jpPendingImages.splice(idx, 1);
+  jpRenderPending();
+}
+
+function jpRemoveVoice() {
+  jpPendingVoice = '';
+  jpRenderPending();
+}
+
+function jpRenderPending() {
+  const el = document.getElementById('jarvis-pending');
+  if (!el) return;
+
+  const parts = [];
+
+  if (jpPendingVoice) {
+    parts.push(`
+      <div class="jarvis-pending-voice">
+        <span>🎙️</span>
+        <span class="jarvis-pending-voice-text" contenteditable="true" oninput="jpPendingVoice=this.textContent">${escapeHtml(jpPendingVoice)}</span>
+        <button class="jarvis-pending-voice-remove" onclick="jpRemoveVoice()" title="Remove">✕</button>
+      </div>`);
+  }
+
+  jpPendingImages.forEach((img, i) => {
+    parts.push(`
+      <div class="jarvis-pending-img">
+        <img src="${escapeHtml(img.dataUrl)}" alt="${escapeHtml(img.name)}">
+        <button class="jarvis-pending-img-remove" onclick="jpRemoveImage(${i})" title="Remove">✕</button>
+      </div>`);
+  });
+
+  el.innerHTML = parts.join('');
+}
+
+function jpHandleKey(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    jpSend();
+  }
+}
+
+async function jpSend() {
+  if (jpState === 'thinking' || jpState === 'transcribing') return;
+
+  const textarea = document.getElementById('jp-text');
+  const typedText = (textarea ? textarea.value.trim() : '');
+
+  // Combine typed text + pending voice
+  let messageText = typedText;
+  if (jpPendingVoice) {
+    messageText = messageText ? messageText + '\n' + jpPendingVoice : jpPendingVoice;
+  }
+
+  if (!messageText && jpPendingImages.length === 0) return;
+
+  // Optimistic: show user message immediately
+  const userEntry = {
+    role: 'user',
+    transcript: messageText || '(image)',
+    images: jpPendingImages.length > 0 ? JSON.stringify(jpPendingImages.map(i => i.dataUrl)) : null,
+    created_at: new Date().toISOString()
+  };
+  jpConversation.unshift(userEntry);
+  jpRenderHistory();
+
+  // Clear composer
+  if (textarea) textarea.value = '';
+  const imageDataUrls = jpPendingImages.map(i => i.dataUrl);
+  jpPendingImages = [];
+  jpPendingVoice = '';
+  jpRenderPending();
+
+  jpSetState('thinking');
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 330000);
+    let res;
+    try {
+      res = await fetch('/api/voice/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: messageText || '(image)', images: imageDataUrls }),
+        signal: controller.signal
+      });
+    } catch (fetchErr) {
+      clearTimeout(timeout);
+      jpSetState('idle');
+      jpSetStatus(fetchErr.name === 'AbortError' ? 'Timed out.' : 'Connection lost.');
+      return;
+    }
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      let errMsg = res.status;
+      try { const e = await res.json(); errMsg = e.error || errMsg; } catch {}
+      jpSetState('idle');
+      jpSetStatus('Error: ' + errMsg);
+      return;
+    }
+
+    const { speech_script, chat_text } = await res.json();
+    jpConversation.unshift({ role: 'assistant', chat_text, speech_script, created_at: new Date().toISOString() });
+    jpRenderHistory();
+
+    jpSetState('speaking');
+    jpSpeak(speech_script, () => jpSetState('idle'));
+
+  } catch (e) {
+    jpSetState('idle');
+    jpSetStatus('Error: ' + e.message);
+  }
+}
+
+async function jpSpeak(text, onEnd) {
   if (!text) { if (onEnd) onEnd(); return; }
+  if (jpCurrentAudio) { jpCurrentAudio.pause(); jpCurrentAudio = null; }
 
-  // Stop any currently playing audio
-  if (voiceCurrentAudio) { voiceCurrentAudio.pause(); voiceCurrentAudio = null; }
-
-  const session = ++voiceSpeakSession;
-  const endpoint = (document.getElementById('voice-mlx-endpoint')?.value || voiceMlxEndpoint).trim();
+  const session = ++jpSpeakSession;
+  const endpoint = jpMlxEndpoint.trim();
+  const voice = jpSelectedVoice;
+  const model = 'mlx-community/Kokoro-82M-bf16';
 
   try {
     const res = await fetch(`${endpoint}/v1/audio/speech`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: voiceMlxModel,
-        input: text,
-        voice: voiceSelectedVoice,
-        response_format: 'wav'
-      })
+      body: JSON.stringify({ model, input: text, voice, response_format: 'wav' })
     });
-
-    if (!res.ok) throw new Error(`mlx-audio TTS error: ${res.status}`);
-    if (session !== voiceSpeakSession) return; // newer call started
-
+    if (!res.ok) throw new Error(`TTS error: ${res.status}`);
+    if (session !== jpSpeakSession) return;
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
-    voiceCurrentAudio = audio;
-
-    audio.onended = () => {
-      URL.revokeObjectURL(url);
-      voiceCurrentAudio = null;
-      if (session === voiceSpeakSession && onEnd) onEnd();
-    };
-    audio.onerror = () => {
-      URL.revokeObjectURL(url);
-      voiceCurrentAudio = null;
-      if (session === voiceSpeakSession && onEnd) onEnd();
-    };
+    jpCurrentAudio = audio;
+    audio.onended = () => { URL.revokeObjectURL(url); jpCurrentAudio = null; if (session === jpSpeakSession && onEnd) onEnd(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); jpCurrentAudio = null; if (session === jpSpeakSession && onEnd) onEnd(); };
     audio.play();
   } catch (e) {
-    console.warn('mlx-audio TTS failed:', e.message);
-    if (session === voiceSpeakSession && onEnd) onEnd();
+    console.warn('jpSpeak failed:', e.message);
+    if (session === jpSpeakSession && onEnd) onEnd();
   }
 }
 
-async function voiceClearHistory() {
-  if (!confirm('Clear all voice history?')) return;
+async function jpClearHistory() {
+  if (!confirm('Clear all Jarvis chat history?')) return;
   try {
     await fetch('/api/voice/history', { method: 'DELETE' });
-    voiceConversation = [];
-    voiceRenderConversation();
-    const transcriptRow = document.getElementById('voice-transcript-row');
-    if (transcriptRow) transcriptRow.style.display = 'none';
-    voiceSetState('idle');
+    jpConversation = [];
+    jpRenderHistory();
   } catch (e) {
-    console.error('Failed to clear voice history', e);
+    console.error('Failed to clear history', e);
   }
 }
