@@ -8194,6 +8194,28 @@ async function jpSend() {
   }
 }
 
+// Strip markdown and special chars that crash Kokoro's phoneme converter (misaki)
+function jpCleanForTTS(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, '')           // code blocks
+    .replace(/`([^`]+)`/g, '$1')              // inline code
+    .replace(/\*\*(.+?)\*\*/g, '$1')          // bold
+    .replace(/\*(.+?)\*/g, '$1')              // italic
+    .replace(/__(.+?)__/g, '$1')              // bold alt
+    .replace(/_(.+?)_/g, '$1')                // italic alt
+    .replace(/~~(.+?)~~/g, '$1')              // strikethrough
+    .replace(/^#{1,6}\s+/gm, '')              // headings
+    .replace(/^[-*+]\s+/gm, '')               // list bullets
+    .replace(/^\d+\.\s+/gm, '')               // numbered lists
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // links
+    .replace(/[<>|\\{}[\]]/g, '')             // angle brackets, pipes, etc.
+    .replace(/&[a-z]+;/gi, '')                // HTML entities
+    .replace(/\n{2,}/g, '. ')                 // paragraph breaks → pause
+    .replace(/\n/g, ' ')                      // newlines → space
+    .replace(/\s{2,}/g, ' ')                  // collapse whitespace
+    .trim();
+}
+
 function jpSplitIntoChunks(text) {
   // Split on sentence boundaries, keep chunks under ~200 chars for reliable TTS
   var sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [text];
@@ -8221,7 +8243,9 @@ async function jpSpeak(text, onEnd) {
   var endpoint = jpMlxEndpoint.trim();
   var voice = jpSelectedVoice;
   var model = 'mlx-community/Kokoro-82M-bf16';
-  var chunks = jpSplitIntoChunks(text);
+  var cleaned = jpCleanForTTS(text);
+  if (!cleaned) { if (onEnd) onEnd(); return; }
+  var chunks = jpSplitIntoChunks(cleaned);
 
   for (var ci = 0; ci < chunks.length; ci++) {
     if (session !== jpSpeakSession) return; // cancelled
