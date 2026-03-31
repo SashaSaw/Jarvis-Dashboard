@@ -6679,7 +6679,6 @@ async function periodicRefresh() {
 
 window.addEventListener('hashchange', route);
 route();
-jarvisInitPanel();
 refreshAgentSidebar();
 updateTimestamp();
 
@@ -8096,3 +8095,6 @@ async function jpClearHistory() {
     console.error('Failed to clear history', e);
   }
 }
+
+// Init Jarvis panel after all jp vars are declared
+jarvisInitPanel();
