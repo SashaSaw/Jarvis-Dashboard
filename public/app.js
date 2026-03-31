@@ -7686,14 +7686,16 @@ function jpRenderHistory() {
           <div>${escapeHtml(entry.transcript || '')}</div>
         </div>`;
     } else {
-      const html = jpRenderMarkdown(entry.chat_text || '');
-      const idx = jpReplayCache.length;
-      jpReplayCache.push(entry.speech_script || '');
+      var html = jpRenderMarkdown(entry.chat_text || '');
+      var idx = jpReplayCache.length;
+      var hasAudio = !!(entry.speech_script);
+      jpReplayCache.push({ speech: entry.speech_script || '', text: entry.chat_text || '' });
+      var btnLabel = hasAudio ? '▶ Replay' : '🔊 Generate Speech';
       return `
         <div class="jarvis-msg-assistant">
           ${html}
           <div class="jarvis-msg-assistant-actions">
-            <button class="voice-replay-btn" onclick="jpReplay(${idx})">▶ Replay</button>
+            <button class="voice-replay-btn" onclick="jpReplay(${idx})">${btnLabel}</button>
           </div>
         </div>`;
     }
@@ -7727,11 +7729,14 @@ function jpRenderMarkdown(text) {
 }
 
 function jpReplay(idx) {
-  if (jpState === 'transcribing' || jpState === 'thinking') return;
-  const text = jpReplayCache[idx];
-  if (!text) return;
+  if (jpState === 'transcribing' || jpState === 'thinking' || jpState === 'speaking') return;
+  var cached = jpReplayCache[idx];
+  if (!cached) return;
+  // Use speech_script if available, otherwise fall back to chat_text for TTS generation
+  var textToSpeak = cached.speech || cached.text;
+  if (!textToSpeak) return;
   jpSetState('speaking');
-  jpSpeak(text, () => jpSetState('idle'));
+  jpSpeak(textToSpeak, function() { jpSetState('idle'); });
 }
 
 function jpSetState(state) {
