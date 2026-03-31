@@ -7808,7 +7808,12 @@ async function jpStartRecording() {
 
     jpSetState('recording');
   } catch (e) {
-    jpSetStatus(e.name === 'NotAllowedError' ? 'Microphone permission denied.' : 'Mic error: ' + e.message);
+    if (e.name === 'NotAllowedError') {
+      jpShowToast('Microphone access denied. Allow microphone permission in your browser settings and try again.', 'error');
+    } else {
+      jpShowToast('Microphone error: ' + e.message, 'error');
+    }
+    jpSetStatus('');
   }
 }
 
@@ -7882,12 +7887,12 @@ async function jpHandleRecordingStop() {
     const formData = new FormData();
     formData.append('file', blob, 'audio.wav');
     const res = await fetch(`${endpoint}/inference`, { method: 'POST', body: formData });
-    if (!res.ok) throw new Error(`Whisper returned ${res.status}`);
-    const data = await res.json();
-    const transcript = (data.text || '').trim();
+    if (!res.ok) throw new Error('Whisper returned HTTP ' + res.status);
+    var data = await res.json();
+    var transcript = (data.text || '').trim();
     if (!transcript) {
       jpSetState('idle');
-      jpSetStatus('No speech detected.');
+      jpShowToast('No speech detected — try speaking louder or closer to the mic.', 'warning');
       return;
     }
     jpPendingVoice = jpPendingVoice ? jpPendingVoice + ' ' + transcript : transcript;
@@ -7895,8 +7900,7 @@ async function jpHandleRecordingStop() {
     jpRenderPending();
   } catch (e) {
     jpSetState('idle');
-    const modelFile = jpWhisperModel === 'small' ? 'whisper-small.en.bin' : 'whisper-tiny.en.bin';
-    jpSetStatus(`Whisper offline. Start: whisper-server -m ~/${modelFile} --port 8080`);
+    jpShowToast('Speech-to-text server is offline. Make sure whisper-server is running on port 8080.', 'error');
   }
 }
 
@@ -7904,17 +7908,42 @@ function jpOpenImagePicker() {
   document.getElementById('jp-image-input').click();
 }
 
+var JP_MAX_IMAGE_SIZE_MB = 10;
+var JP_MAX_PAYLOAD_MB = 45; // server limit is 50mb, leave headroom
+
+function jpFormatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function jpEstimatePayloadSize() {
+  var total = 0;
+  jpPendingImages.forEach(function(img) { total += img.dataUrl.length; });
+  return total;
+}
+
 async function jpHandleImages(input) {
-  console.log('[JP] jpHandleImages called, files:', input.files.length);
-  const files = Array.from(input.files);
-  for (const file of files) {
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = e => resolve(e.target.result);
+  var files = Array.from(input.files);
+  for (var file of files) {
+    // Check individual file size
+    if (file.size > JP_MAX_IMAGE_SIZE_MB * 1024 * 1024) {
+      jpShowToast('Image "' + file.name + '" is ' + jpFormatSize(file.size) + ' — max is ' + JP_MAX_IMAGE_SIZE_MB + ' MB. Try a smaller image.', 'error');
+      continue;
+    }
+    var dataUrl = await new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function(e) { resolve(e.target.result); };
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
-    jpPendingImages.push({ dataUrl, name: file.name });
+    // Check cumulative payload size
+    var newTotal = jpEstimatePayloadSize() + dataUrl.length;
+    if (newTotal > JP_MAX_PAYLOAD_MB * 1024 * 1024) {
+      jpShowToast('Total attachments (' + jpFormatSize(newTotal) + ') exceed the ' + JP_MAX_PAYLOAD_MB + ' MB limit. Remove some images first.', 'error');
+      continue;
+    }
+    jpPendingImages.push({ dataUrl: dataUrl, name: file.name, size: file.size });
   }
   input.value = '';
   jpRenderPending();
@@ -7932,7 +7961,6 @@ function jpRemoveVoice() {
 
 function jpRenderPending() {
   const el = document.getElementById('jarvis-pending');
-  console.log('[JP] jpRenderPending called, el:', !!el, 'images:', jpPendingImages.length, 'voice:', !!jpPendingVoice);
   if (!el) return;
 
   el.innerHTML = '';
@@ -7964,15 +7992,56 @@ function jpRenderPending() {
     const img = document.createElement('img');
     img.src = imgData.dataUrl;
     img.alt = imgData.name;
+    // Size label
+    const sizeLabel = document.createElement('span');
+    sizeLabel.className = 'jarvis-pending-img-size';
+    sizeLabel.textContent = imgData.size ? jpFormatSize(imgData.size) : '';
     const btn = document.createElement('button');
     btn.className = 'jarvis-pending-img-remove';
     btn.title = 'Remove';
     btn.textContent = '✕';
     btn.addEventListener('click', () => jpRemoveImage(i));
     div.appendChild(img);
+    div.appendChild(sizeLabel);
     div.appendChild(btn);
     el.appendChild(div);
   });
+}
+
+// ===== TOAST NOTIFICATION SYSTEM =====
+function jpShowToast(message, type) {
+  type = type || 'info'; // 'info', 'error', 'warning', 'success'
+  var container = document.getElementById('jp-toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'jp-toast-container';
+    container.className = 'jp-toast-container';
+    document.body.appendChild(container);
+  }
+  var toast = document.createElement('div');
+  toast.className = 'jp-toast jp-toast-' + type;
+  
+  var iconMap = { error: '⚠️', warning: '⚡', info: 'ℹ️', success: '✅' };
+  toast.innerHTML = '<span class="jp-toast-icon">' + (iconMap[type] || 'ℹ️') + '</span>' +
+    '<span class="jp-toast-msg">' + escapeHtml(message) + '</span>' +
+    '<button class="jp-toast-close" onclick="this.parentElement.remove()">✕</button>';
+  
+  container.appendChild(toast);
+  // Auto-remove after 8s (errors stay longer)
+  var duration = type === 'error' ? 12000 : 8000;
+  setTimeout(function() { if (toast.parentElement) toast.remove(); }, duration);
+}
+
+// Show error as a chat bubble from the system so user sees it in context
+function jpShowErrorBubble(message) {
+  jpConversation.unshift({
+    role: 'assistant',
+    chat_text: '⚠️ ' + message,
+    speech_script: null,
+    created_at: new Date().toISOString(),
+    isError: true
+  });
+  jpRenderHistory();
 }
 
 function jpHandleKey(event) {
@@ -7985,22 +8054,29 @@ function jpHandleKey(event) {
 async function jpSend() {
   if (jpState === 'thinking' || jpState === 'transcribing') return;
 
-  const textarea = document.getElementById('jp-text');
-  const typedText = (textarea ? textarea.value.trim() : '');
+  var textarea = document.getElementById('jp-text');
+  var typedText = (textarea ? textarea.value.trim() : '');
 
   // Combine typed text + pending voice
-  let messageText = typedText;
+  var messageText = typedText;
   if (jpPendingVoice) {
     messageText = messageText ? messageText + '\n' + jpPendingVoice : jpPendingVoice;
   }
 
   if (!messageText && jpPendingImages.length === 0) return;
 
+  // Check payload size before sending
+  var payloadSize = jpEstimatePayloadSize() + (messageText || '').length;
+  if (payloadSize > JP_MAX_PAYLOAD_MB * 1024 * 1024) {
+    jpShowToast('Message too large (' + jpFormatSize(payloadSize) + '). Max is ' + JP_MAX_PAYLOAD_MB + ' MB. Remove some images or use smaller ones.', 'error');
+    return;
+  }
+
   // Optimistic: show user message immediately
-  const userEntry = {
+  var userEntry = {
     role: 'user',
     transcript: messageText || '(image)',
-    images: jpPendingImages.length > 0 ? JSON.stringify(jpPendingImages.map(i => i.dataUrl)) : null,
+    images: jpPendingImages.length > 0 ? JSON.stringify(jpPendingImages.map(function(i) { return i.dataUrl; })) : null,
     created_at: new Date().toISOString()
   };
   jpConversation.unshift(userEntry);
@@ -8008,7 +8084,7 @@ async function jpSend() {
 
   // Clear composer
   if (textarea) textarea.value = '';
-  const imageDataUrls = jpPendingImages.map(i => i.dataUrl);
+  var imageDataUrls = jpPendingImages.map(function(i) { return i.dataUrl; });
   jpPendingImages = [];
   jpPendingVoice = '';
   jpRenderPending();
@@ -8016,9 +8092,9 @@ async function jpSend() {
   jpSetState('thinking');
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 330000);
-    let res;
+    var controller = new AbortController();
+    var timeout = setTimeout(function() { controller.abort(); }, 330000);
+    var res;
     try {
       res = await fetch('/api/voice/message', {
         method: 'POST',
@@ -8029,29 +8105,49 @@ async function jpSend() {
     } catch (fetchErr) {
       clearTimeout(timeout);
       jpSetState('idle');
-      jpSetStatus(fetchErr.name === 'AbortError' ? 'Timed out.' : 'Connection lost.');
+      if (fetchErr.name === 'AbortError') {
+        jpShowErrorBubble('Request timed out after 5 minutes. The server might be overloaded — try again in a moment.');
+      } else {
+        jpShowErrorBubble('Can\'t reach the server. Check your connection or try refreshing the page.');
+      }
       return;
     }
     clearTimeout(timeout);
 
     if (!res.ok) {
-      let errMsg = res.status;
-      try { const e = await res.json(); errMsg = e.error || errMsg; } catch {}
+      var status = res.status;
+      var errDetail = '';
+      try { var e = await res.json(); errDetail = e.error || ''; } catch (_) {}
       jpSetState('idle');
-      jpSetStatus('Error: ' + errMsg);
+      
+      if (status === 413) {
+        jpShowErrorBubble('Message too large for the server (max ~50 MB). Try smaller images or fewer attachments.');
+      } else if (status === 504 || status === 502) {
+        jpShowErrorBubble('The AI gateway is temporarily unavailable (HTTP ' + status + '). It may have just restarted — wait 30 seconds and try again.');
+      } else if (status === 429) {
+        jpShowErrorBubble('Rate limited — too many requests. Wait a minute before sending again.');
+      } else if (status === 500) {
+        jpShowErrorBubble('Server error: ' + (errDetail || 'Something went wrong internally. Try again or check the server logs.'));
+      } else {
+        jpShowErrorBubble('Request failed (HTTP ' + status + ')' + (errDetail ? ': ' + errDetail : '. Try again in a moment.'));
+      }
       return;
     }
 
-    const { speech_script, chat_text } = await res.json();
-    jpConversation.unshift({ role: 'assistant', chat_text, speech_script, created_at: new Date().toISOString() });
+    var data = await res.json();
+    jpConversation.unshift({ role: 'assistant', chat_text: data.chat_text, speech_script: data.speech_script, created_at: new Date().toISOString() });
     jpRenderHistory();
 
-    jpSetState('speaking');
-    jpSpeak(speech_script, () => jpSetState('idle'));
+    if (data.speech_script) {
+      jpSetState('speaking');
+      jpSpeak(data.speech_script, function() { jpSetState('idle'); });
+    } else {
+      jpSetState('idle');
+    }
 
   } catch (e) {
     jpSetState('idle');
-    jpSetStatus('Error: ' + e.message);
+    jpShowErrorBubble('Unexpected error: ' + e.message);
   }
 }
 
