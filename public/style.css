@@ -8993,6 +8993,35 @@ body {
   gap: 10px;
 }
 
+.jarvis-date-separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+
+.jarvis-date-separator span {
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 3px 12px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+}
+
+.jarvis-msg-time {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
+.jarvis-msg-time-user {
+  color: rgba(255, 255, 255, 0.6);
+  text-align: right;
+}
+
 .jarvis-history-empty {
   color: var(--text-muted);
   font-size: 0.82rem;

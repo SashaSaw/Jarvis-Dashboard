@@ -7665,6 +7665,21 @@ async function jpLoadHistory() {
   }
 }
 
+function jpFormatDateSeparator(date) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((today - msgDay) / 86400000);
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return date.toLocaleDateString(undefined, { weekday: 'long' });
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: now.getFullYear() !== date.getFullYear() ? 'numeric' : undefined });
+}
+
+function jpFormatTime(date) {
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
 function jpRenderHistory() {
   const el = document.getElementById('jarvis-history');
   if (!el) return;
@@ -7676,14 +7691,26 @@ function jpRenderHistory() {
 
   // History is newest-first; render oldest-first for chat feel
   const ordered = [...jpConversation].reverse();
+  let lastDateStr = null;
   el.innerHTML = ordered.map(entry => {
+    let dateSeparator = '';
+    if (entry.created_at) {
+      const d = new Date(entry.created_at);
+      const dateStr = jpFormatDateSeparator(d);
+      if (dateStr !== lastDateStr) {
+        dateSeparator = `<div class="jarvis-date-separator"><span>${escapeHtml(dateStr)}</span></div>`;
+        lastDateStr = dateStr;
+      }
+    }
+    const timeStr = entry.created_at ? jpFormatTime(new Date(entry.created_at)) : '';
     if (entry.role === 'user') {
       const imagesHtml = jpRenderHistoryImages(entry.images);
       const voicePrefix = entry.transcript ? '' : '';
-      return `
+      return dateSeparator + `
         <div class="jarvis-msg-user">
           ${imagesHtml}
           <div>${escapeHtml(entry.transcript || '')}</div>
+          ${timeStr ? `<div class="jarvis-msg-time jarvis-msg-time-user">${escapeHtml(timeStr)}</div>` : ''}
         </div>`;
     } else {
       var html = jpRenderMarkdown(entry.chat_text || '');
@@ -7691,9 +7718,10 @@ function jpRenderHistory() {
       var hasAudio = !!(entry.speech_script);
       jpReplayCache.push({ speech: entry.speech_script || '', text: entry.chat_text || '' });
       var btnLabel = hasAudio ? '▶ Replay' : '🔊 Generate Speech';
-      return `
+      return dateSeparator + `
         <div class="jarvis-msg-assistant">
           ${html}
+          ${timeStr ? `<div class="jarvis-msg-time">${escapeHtml(timeStr)}</div>` : ''}
           <div class="jarvis-msg-assistant-actions">
             <button class="voice-replay-btn" onclick="jpReplay(${idx})">${btnLabel}</button>
           </div>
@@ -8143,16 +8171,26 @@ async function jpSend() {
     jpConversation.unshift({ role: 'assistant', chat_text: data.chat_text, speech_script: data.speech_script, created_at: new Date().toISOString() });
     jpRenderHistory();
 
+    jpSetState('idle');
+
+    // TTS is best-effort — don't let it break the chat flow
     if (data.speech_script) {
-      jpSetState('speaking');
-      jpSpeak(data.speech_script, function() { jpSetState('idle'); });
-    } else {
-      jpSetState('idle');
+      try {
+        jpSetState('speaking');
+        await jpSpeak(data.speech_script, function() { jpSetState('idle'); });
+      } catch (_ttsErr) {
+        jpSetState('idle');
+        jpShowToast('Text-to-speech failed — Kokoro may be offline. You can retry with the 🔊 button.', 'warning');
+      }
     }
 
   } catch (e) {
     jpSetState('idle');
-    jpShowErrorBubble('Unexpected error: ' + e.message);
+    if (e.message && e.message.includes('Failed to fetch')) {
+      jpShowErrorBubble('Lost connection to the server. It may have crashed or restarted — wait a moment and refresh.');
+    } else {
+      jpShowErrorBubble('Unexpected error: ' + e.message);
+    }
   }
 }
 
@@ -8208,11 +8246,13 @@ async function jpSpeak(text, onEnd) {
         audio.play();
       });
     } catch (e) {
-      console.warn('jpSpeak chunk failed:', e.message);
-      break; // stop speaking on TTS error
+      // TTS failed — show toast on first failure only, then stop
+      jpShowToast('Speech playback failed — Kokoro TTS may be offline. Use 🔊 to retry later.', 'warning');
+      break;
     }
   }
 
+  jpCurrentAudio = null;
   if (session === jpSpeakSession && onEnd) onEnd();
 }
 
