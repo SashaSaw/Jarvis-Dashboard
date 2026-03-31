@@ -7526,7 +7526,7 @@ function renderUsageTable(rows) {
 // ===== SHARED AUDIO UTILS =====
 
 // Kokoro voice presets
-const KOKORO_VOICES = [
+var KOKORO_VOICES = [
   { id: 'af_heart',    label: 'Heart (EN-F)' },
   { id: 'af_sky',      label: 'Sky (EN-F)' },
   { id: 'af_bella',    label: 'Bella (EN-F)' },
@@ -7583,23 +7583,23 @@ async function convertBlobToWav(blob) {
 
 // ===== JARVIS CHAT PANEL =====
 
-let jpState = 'idle'; // idle | recording | transcribing | thinking | speaking
-let jpMediaRecorder = null;
-let jpChunks = [];
-let jpPendingImages = []; // array of { dataUrl, name }
-let jpPendingVoice = ''; // transcribed text staged before send
-let jpAudioContext = null;
-let jpAnalyser = null;
-let jpAudioSource = null;
-let jpAudioAnimFrame = null;
-let jpWhisperEndpoint = 'http://127.0.0.1:8080';
-let jpMlxEndpoint = 'http://127.0.0.1:8000';
-let jpSelectedVoice = 'af_heart';
-let jpWhisperModel = 'tiny';
-let jpConversation = []; // local cache
-let jpCurrentAudio = null;
-let jpSpeakSession = 0;
-let jpReplayCache = []; // speech_scripts for replay buttons
+var jpState = 'idle'; // idle | recording | transcribing | thinking | speaking
+var jpMediaRecorder = null;
+var jpChunks = [];
+var jpPendingImages = []; // array of { dataUrl, name }
+var jpPendingVoice = ''; // transcribed text staged before send
+var jpAudioContext = null;
+var jpAnalyser = null;
+var jpAudioSource = null;
+var jpAudioAnimFrame = null;
+var jpWhisperEndpoint = 'http://127.0.0.1:8080';
+var jpMlxEndpoint = 'http://127.0.0.1:8000';
+var jpSelectedVoice = 'af_heart';
+var jpWhisperModel = 'tiny';
+var jpConversation = []; // local cache
+var jpCurrentAudio = null;
+var jpSpeakSession = 0;
+var jpReplayCache = []; // speech_scripts for replay buttons
 
 function jarvisInitPanel() {
   // Populate voice dropdown
@@ -7906,6 +7906,7 @@ function jpOpenImagePicker() {
 }
 
 async function jpHandleImages(input) {
+  console.log('[JP] jpHandleImages called, files:', input.files.length);
   const files = Array.from(input.files);
   for (const file of files) {
     const dataUrl = await new Promise((resolve, reject) => {
@@ -7932,6 +7933,7 @@ function jpRemoveVoice() {
 
 function jpRenderPending() {
   const el = document.getElementById('jarvis-pending');
+  console.log('[JP] jpRenderPending called, el:', !!el, 'images:', jpPendingImages.length, 'voice:', !!jpPendingVoice);
   if (!el) return;
 
   el.innerHTML = '';
