@@ -8151,34 +8151,64 @@ async function jpSend() {
   }
 }
 
+function jpSplitIntoChunks(text) {
+  // Split on sentence boundaries, keep chunks under ~200 chars for reliable TTS
+  var sentences = text.match(/[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g) || [text];
+  var chunks = [];
+  var current = '';
+  for (var i = 0; i < sentences.length; i++) {
+    var s = sentences[i].trim();
+    if (!s) continue;
+    if (current.length + s.length > 200 && current.length > 0) {
+      chunks.push(current.trim());
+      current = s;
+    } else {
+      current = current ? current + ' ' + s : s;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks.length > 0 ? chunks : [text];
+}
+
 async function jpSpeak(text, onEnd) {
   if (!text) { if (onEnd) onEnd(); return; }
   if (jpCurrentAudio) { jpCurrentAudio.pause(); jpCurrentAudio = null; }
 
-  const session = ++jpSpeakSession;
-  const endpoint = jpMlxEndpoint.trim();
-  const voice = jpSelectedVoice;
-  const model = 'mlx-community/Kokoro-82M-bf16';
+  var session = ++jpSpeakSession;
+  var endpoint = jpMlxEndpoint.trim();
+  var voice = jpSelectedVoice;
+  var model = 'mlx-community/Kokoro-82M-bf16';
+  var chunks = jpSplitIntoChunks(text);
 
-  try {
-    const res = await fetch(`${endpoint}/v1/audio/speech`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, input: text, voice, response_format: 'wav' })
-    });
-    if (!res.ok) throw new Error(`TTS error: ${res.status}`);
-    if (session !== jpSpeakSession) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    jpCurrentAudio = audio;
-    audio.onended = () => { URL.revokeObjectURL(url); jpCurrentAudio = null; if (session === jpSpeakSession && onEnd) onEnd(); };
-    audio.onerror = () => { URL.revokeObjectURL(url); jpCurrentAudio = null; if (session === jpSpeakSession && onEnd) onEnd(); };
-    audio.play();
-  } catch (e) {
-    console.warn('jpSpeak failed:', e.message);
-    if (session === jpSpeakSession && onEnd) onEnd();
+  for (var ci = 0; ci < chunks.length; ci++) {
+    if (session !== jpSpeakSession) return; // cancelled
+
+    try {
+      var res = await fetch(endpoint + '/v1/audio/speech', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: model, input: chunks[ci], voice: voice, response_format: 'wav' })
+      });
+      if (!res.ok) throw new Error('TTS error: ' + res.status);
+      if (session !== jpSpeakSession) return;
+      var blob = await res.blob();
+      var url = URL.createObjectURL(blob);
+
+      // Play this chunk and wait for it to finish before next
+      await new Promise(function(resolve) {
+        var audio = new Audio(url);
+        jpCurrentAudio = audio;
+        audio.onended = function() { URL.revokeObjectURL(url); jpCurrentAudio = null; resolve(); };
+        audio.onerror = function() { URL.revokeObjectURL(url); jpCurrentAudio = null; resolve(); };
+        audio.play();
+      });
+    } catch (e) {
+      console.warn('jpSpeak chunk failed:', e.message);
+      break; // stop speaking on TTS error
+    }
   }
+
+  if (session === jpSpeakSession && onEnd) onEnd();
 }
 
 async function jpClearHistory() {
