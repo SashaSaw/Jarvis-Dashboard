@@ -7588,6 +7588,10 @@ let jpMediaRecorder = null;
 let jpChunks = [];
 let jpPendingImages = []; // array of { dataUrl, name }
 let jpPendingVoice = ''; // transcribed text staged before send
+let jpAudioContext = null;
+let jpAnalyser = null;
+let jpAudioSource = null;
+let jpAudioAnimFrame = null;
 let jpWhisperEndpoint = 'http://127.0.0.1:8080';
 let jpMlxEndpoint = 'http://127.0.0.1:8000';
 let jpSelectedVoice = 'af_heart';
@@ -7734,19 +7738,35 @@ function jpReplay(idx) {
 function jpSetState(state) {
   jpState = state;
   const micBtn = document.getElementById('jp-mic-btn');
+  const micWrap = micBtn ? micBtn.closest('.jp-mic-wrap') : null;
   const sendBtn = document.getElementById('jp-send-btn');
   const statusEl = document.getElementById('jp-status');
+  const vizCanvas = document.getElementById('jp-audio-viz');
 
-  if (micBtn) {
-    micBtn.classList.toggle('active', state === 'recording');
-  }
   if (sendBtn) {
     sendBtn.disabled = (state === 'thinking' || state === 'transcribing');
   }
 
+  // Apply state class to mic wrapper for ring animations
+  if (micWrap) {
+    micWrap.classList.remove('jp-recording', 'jp-transcribing', 'jp-thinking', 'jp-speaking');
+    if (state !== 'idle') micWrap.classList.add('jp-' + state);
+  }
+  // Legacy active class on button (kept for compatibility)
+  if (micBtn) micBtn.classList.toggle('active', state === 'recording');
+
+  // Show/hide audio level visualizer
+  if (vizCanvas) {
+    if (state === 'recording') {
+      vizCanvas.classList.add('jp-viz-active');
+    } else {
+      vizCanvas.classList.remove('jp-viz-active');
+    }
+  }
+
   const statusMap = {
     idle: '',
-    recording: '● Recording...',
+    recording: 'Recording...',
     transcribing: 'Transcribing...',
     thinking: 'Thinking...',
     speaking: 'Speaking...'
@@ -7775,6 +7795,18 @@ async function jpStartRecording() {
     jpMediaRecorder.ondataavailable = e => { if (e.data.size > 0) jpChunks.push(e.data); };
     jpMediaRecorder.onstop = jpHandleRecordingStop;
     jpMediaRecorder.start();
+
+    // Set up Web Audio API analyser for level visualization
+    try {
+      jpAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      jpAudioSource = jpAudioContext.createMediaStreamSource(stream);
+      jpAnalyser = jpAudioContext.createAnalyser();
+      jpAnalyser.fftSize = 64;
+      jpAnalyser.smoothingTimeConstant = 0.7;
+      jpAudioSource.connect(jpAnalyser);
+      jpDrawAudioLevel();
+    } catch (_) { /* visualizer optional */ }
+
     jpSetState('recording');
   } catch (e) {
     jpSetStatus(e.name === 'NotAllowedError' ? 'Microphone permission denied.' : 'Mic error: ' + e.message);
@@ -7786,7 +7818,55 @@ function jpStopRecording() {
     jpMediaRecorder.stop();
     jpMediaRecorder.stream.getTracks().forEach(t => t.stop());
   }
+
+  // Tear down audio visualizer
+  if (jpAudioAnimFrame) { cancelAnimationFrame(jpAudioAnimFrame); jpAudioAnimFrame = null; }
+  if (jpAudioSource) { try { jpAudioSource.disconnect(); } catch(_){} jpAudioSource = null; }
+  if (jpAudioContext) { try { jpAudioContext.close(); } catch(_){} jpAudioContext = null; }
+  jpAnalyser = null;
+
   jpSetState('transcribing');
+}
+
+function jpDrawAudioLevel() {
+  const canvas = document.getElementById('jp-audio-viz');
+  if (!canvas || !jpAnalyser || jpState !== 'recording') return;
+
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  const bufLen = jpAnalyser.frequencyBinCount;
+  const data = new Uint8Array(bufLen);
+  jpAnalyser.getByteFrequencyData(data);
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Draw 8 bars across the canvas
+  const barCount = 8;
+  const barW = Math.floor(W / barCount) - 2;
+  const usedBins = Math.min(bufLen, 20); // use low-mid frequencies
+  const binsPerBar = Math.floor(usedBins / barCount);
+
+  for (let i = 0; i < barCount; i++) {
+    // Average the bins for this bar
+    let sum = 0;
+    for (let b = 0; b < binsPerBar; b++) {
+      sum += data[i * binsPerBar + b];
+    }
+    const avg = sum / binsPerBar;
+    const barH = Math.max(3, (avg / 255) * H);
+    const x = i * (barW + 2) + 1;
+    const y = (H - barH) / 2;
+
+    // Color: red gradient matching recording state
+    const alpha = 0.5 + (avg / 255) * 0.5;
+    ctx.fillStyle = `rgba(229, 62, 62, ${alpha})`;
+    ctx.beginPath();
+    ctx.roundRect(x, y, barW, barH, 2);
+    ctx.fill();
+  }
+
+  jpAudioAnimFrame = requestAnimationFrame(jpDrawAudioLevel);
 }
 
 async function jpHandleRecordingStop() {
@@ -7854,26 +7934,44 @@ function jpRenderPending() {
   const el = document.getElementById('jarvis-pending');
   if (!el) return;
 
-  const parts = [];
+  el.innerHTML = '';
 
   if (jpPendingVoice) {
-    parts.push(`
-      <div class="jarvis-pending-voice">
-        <span>🎙️</span>
-        <span class="jarvis-pending-voice-text" contenteditable="true" oninput="jpPendingVoice=this.textContent">${escapeHtml(jpPendingVoice)}</span>
-        <button class="jarvis-pending-voice-remove" onclick="jpRemoveVoice()" title="Remove">✕</button>
-      </div>`);
+    const voiceDiv = document.createElement('div');
+    voiceDiv.className = 'jarvis-pending-voice';
+    const icon = document.createElement('span');
+    icon.textContent = '🎙️';
+    const textSpan = document.createElement('span');
+    textSpan.className = 'jarvis-pending-voice-text';
+    textSpan.contentEditable = 'true';
+    textSpan.textContent = jpPendingVoice;
+    textSpan.addEventListener('input', e => { jpPendingVoice = e.target.textContent; });
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'jarvis-pending-voice-remove';
+    removeBtn.title = 'Remove';
+    removeBtn.textContent = '✕';
+    removeBtn.addEventListener('click', jpRemoveVoice);
+    voiceDiv.appendChild(icon);
+    voiceDiv.appendChild(textSpan);
+    voiceDiv.appendChild(removeBtn);
+    el.appendChild(voiceDiv);
   }
 
-  jpPendingImages.forEach((img, i) => {
-    parts.push(`
-      <div class="jarvis-pending-img">
-        <img src="${escapeHtml(img.dataUrl)}" alt="${escapeHtml(img.name)}">
-        <button class="jarvis-pending-img-remove" onclick="jpRemoveImage(${i})" title="Remove">✕</button>
-      </div>`);
+  jpPendingImages.forEach((imgData, i) => {
+    const div = document.createElement('div');
+    div.className = 'jarvis-pending-img';
+    const img = document.createElement('img');
+    img.src = imgData.dataUrl;
+    img.alt = imgData.name;
+    const btn = document.createElement('button');
+    btn.className = 'jarvis-pending-img-remove';
+    btn.title = 'Remove';
+    btn.textContent = '✕';
+    btn.addEventListener('click', () => jpRemoveImage(i));
+    div.appendChild(img);
+    div.appendChild(btn);
+    el.appendChild(div);
   });
-
-  el.innerHTML = parts.join('');
 }
 
 function jpHandleKey(event) {

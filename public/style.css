@@ -9173,6 +9173,89 @@ body {
   border-color: #e53e3e;
 }
 
+/* Mic button wrapper — holds button + ring overlay */
+.jp-mic-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.jp-mic-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+/* Recording: pulsing red ring */
+.jp-mic-wrap.jp-recording #jp-mic-btn {
+  background: rgba(229, 62, 62, 0.18);
+  border-color: #e53e3e;
+  color: #e53e3e;
+}
+.jp-mic-wrap.jp-recording::before {
+  border-color: #e53e3e;
+  opacity: 1;
+  animation: jp-pulse-ring 1s ease-in-out infinite;
+}
+
+/* Transcribing: amber pulse */
+.jp-mic-wrap.jp-transcribing #jp-mic-btn {
+  background: rgba(214, 158, 46, 0.18);
+  border-color: #d69e2e;
+  color: #d69e2e;
+}
+.jp-mic-wrap.jp-transcribing::before {
+  border-color: #d69e2e;
+  opacity: 1;
+  animation: jp-pulse-ring 1.2s ease-in-out infinite;
+}
+
+/* Thinking: blue pulse */
+.jp-mic-wrap.jp-thinking #jp-mic-btn {
+  background: rgba(66, 153, 225, 0.18);
+  border-color: #4299e1;
+  color: #4299e1;
+}
+.jp-mic-wrap.jp-thinking::before {
+  border-color: #4299e1;
+  opacity: 1;
+  animation: jp-pulse-ring 1.4s ease-in-out infinite;
+}
+
+/* Speaking: green pulse */
+.jp-mic-wrap.jp-speaking #jp-mic-btn {
+  background: rgba(72, 187, 120, 0.18);
+  border-color: #48bb78;
+  color: #48bb78;
+}
+.jp-mic-wrap.jp-speaking::before {
+  border-color: #48bb78;
+  opacity: 1;
+  animation: jp-pulse-ring 0.9s ease-in-out infinite;
+}
+
+@keyframes jp-pulse-ring {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.25); opacity: 0.2; }
+}
+
+/* Audio level canvas */
+.jp-audio-viz {
+  display: none;
+  border-radius: 4px;
+  vertical-align: middle;
+  background: transparent;
+}
+.jp-audio-viz.jp-viz-active {
+  display: inline-block;
+}
+
 .jarvis-composer-input-row {
   display: flex;
   gap: 6px;

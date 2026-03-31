@@ -152,7 +152,10 @@
       <!-- Composer -->
       <div class="jarvis-composer">
         <div class="jarvis-composer-toolbar">
-          <button id="jp-mic-btn" onclick="jpToggleMic()" title="Voice input">🎙️</button>
+          <div class="jp-mic-wrap">
+            <button id="jp-mic-btn" onclick="jpToggleMic()" title="Voice input">🎙️</button>
+          </div>
+          <canvas id="jp-audio-viz" width="80" height="28" class="jp-audio-viz"></canvas>
           <button onclick="jpOpenImagePicker()" title="Attach image">📎</button>
           <input type="file" id="jp-image-input" accept="image/*" multiple style="display:none" onchange="jpHandleImages(this)">
         </div>
