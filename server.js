@@ -2577,10 +2577,12 @@ Same information but formatted for reading on screen. Use ## headers and bullet 
 User said: `;
 
 app.post('/api/voice/message', async (req, res) => {
-  req.setTimeout(200000); res.setTimeout(200000); // 3.3 min — outlasts gateway timeout
+  req.setTimeout(360000); res.setTimeout(360000); // 6 min socket timeout
   try {
-    const { text } = req.body;
+    const { text, images } = req.body;
     if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
+
+    const hasImages = Array.isArray(images) && images.length > 0;
 
     // Get last exchange for context (before saving new message)
     const lastExchange = getLastVoiceExchange.all();
@@ -2596,17 +2598,31 @@ app.post('/api/voice/message', async (req, res) => {
     }
 
     // Save user message
-    const userResult = insertVoiceEntry.run({ role: 'user', transcript: text.trim(), speech_script: null, chat_text: null });
+    insertVoiceEntry.run({ role: 'user', transcript: text.trim(), speech_script: null, chat_text: null, images: hasImages ? JSON.stringify(images) : null });
 
     // Build messages: context (last exchange) + current message with voice prefix
+    let currentUserContent;
+    if (hasImages) {
+      currentUserContent = [
+        { type: 'text', text: VOICE_PREFIX + text.trim() },
+        ...images.map(url => ({ type: 'image_url', image_url: { url } }))
+      ];
+    } else {
+      currentUserContent = VOICE_PREFIX + text.trim();
+    }
     const messages = [
       ...contextMessages,
-      { role: 'user', content: VOICE_PREFIX + text.trim() }
+      { role: 'user', content: currentUserContent }
     ];
 
     // Call OpenClaw gateway — non-streaming, 3 min timeout
+    // Keep-alive: send a space every 30s so browser doesn't drop the connection
+    const keepAliveInterval = setInterval(() => {
+      try { res.write(''); } catch {}
+    }, 30000);
+
     const gwController = new AbortController();
-    const gwTimeout = setTimeout(() => gwController.abort(), 180000);
+    const gwTimeout = setTimeout(() => gwController.abort(), 300000); // 5 min
     let gwRes;
     try {
       gwRes = await fetch(VOICE_GATEWAY, {
@@ -2624,10 +2640,12 @@ app.post('/api/voice/message', async (req, res) => {
       });
     } catch (fetchErr) {
       clearTimeout(gwTimeout);
-      const msg = fetchErr.name === 'AbortError' ? 'Gateway timed out after 3 minutes' : `Gateway unreachable: ${fetchErr.message}`;
+      clearInterval(keepAliveInterval);
+      const msg = fetchErr.name === 'AbortError' ? 'Gateway timed out after 5 minutes' : `Gateway unreachable: ${fetchErr.message}`;
       return res.status(504).json({ error: msg });
     }
     clearTimeout(gwTimeout);
+    clearInterval(keepAliveInterval);
 
     if (!gwRes.ok) {
       const errText = await gwRes.text();
@@ -2644,7 +2662,7 @@ app.post('/api/voice/message', async (req, res) => {
     const chat_text = chatMatch ? chatMatch[1].trim() : content.trim();
 
     // Save assistant response
-    const assistantResult = insertVoiceEntry.run({ role: 'assistant', transcript: null, speech_script, chat_text });
+    const assistantResult = insertVoiceEntry.run({ role: 'assistant', transcript: null, speech_script, chat_text, images: null });
 
     res.json({ speech_script, chat_text, id: assistantResult.lastInsertRowid });
   } catch (err) {

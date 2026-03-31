@@ -1269,9 +1269,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_voice_history_created ON voice_history(created_at);
 `);
 
+// Add images column if it doesn't exist yet (migration)
+try { db.exec(`ALTER TABLE voice_history ADD COLUMN images TEXT`); } catch {}
+
 const insertVoiceEntry = db.prepare(`
-  INSERT INTO voice_history (role, transcript, speech_script, chat_text)
-  VALUES (@role, @transcript, @speech_script, @chat_text)
+  INSERT INTO voice_history (role, transcript, speech_script, chat_text, images)
+  VALUES (@role, @transcript, @speech_script, @chat_text, @images)
 `);
 
 const getVoiceHistory = db.prepare(`
