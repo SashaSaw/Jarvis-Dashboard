@@ -8197,6 +8197,7 @@ async function jpSend() {
 // Strip markdown and special chars that crash Kokoro's phoneme converter (misaki)
 function jpCleanForTTS(text) {
   return text
+    // --- Markdown stripping ---
     .replace(/```[\s\S]*?```/g, '')           // code blocks
     .replace(/`([^`]+)`/g, '$1')              // inline code
     .replace(/\*\*(.+?)\*\*/g, '$1')          // bold
@@ -8210,6 +8211,21 @@ function jpCleanForTTS(text) {
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // links
     .replace(/[<>|\\{}[\]]/g, '')             // angle brackets, pipes, etc.
     .replace(/&[a-z]+;/gi, '')                // HTML entities
+
+    // --- Model name signatures (e.g. *claude-opus-4-6* appended to responses) ---
+    .replace(/\*?(claude|gpt|gemini|o[1-9]|deepseek|llama|mistral|command-r)[-\w.*]*\*?\s*$/i, '')
+
+    // --- Emoji removal (broad Unicode ranges) ---
+    .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}\u{23E9}-\u{23F3}\u{23F8}-\u{23FA}\u{2934}-\u{2935}\u{25AA}-\u{25FE}\u{2B05}-\u{2B07}\u{2B1B}-\u{2B1C}\u{2B50}\u{2B55}\u{3030}\u{303D}\u{3297}\u{3299}\u{200B}]/gu, '')
+
+    // --- Unusual punctuation & special symbols that misaki can't phonemize ---
+    .replace(/[†‡§¶©®™•◦‣▶►▷▸▹◀◁◂◃★☆✓✗✘✔✕✖✦✧♠♣♥♦♩♪♫♬♭♮♯¤¥£€¢₽₹¦‖⌘⌥⇧⏎∞≈≠≤≥±×÷∑∏∫∂√∇∆∀∃∈∉⊂⊃⊄⊆⊇∧∨⊕⊗⊥∥⟨⟩⟪⟫⌈⌉⌊⌋│┌┐└┘├┤┬┴┼─═║╔╗╚╝╠╣╦╩╬▀▄█▌▐░▒▓■□▪▫◊○●◐◑◒◓⬛⬜🔲🔳]/gu, '')
+
+    // --- Non-ASCII scripts misaki can't handle (CJK, Cyrillic, Arabic, Thai, etc.) ---
+    // Keep Latin + Latin Extended (accented chars like é, ñ, ü) + basic punctuation
+    .replace(/[^\x00-\x7F\u00C0-\u024F\u1E00-\u1EFF]/g, '')
+
+    // --- Whitespace cleanup ---
     .replace(/\n{2,}/g, '. ')                 // paragraph breaks → pause
     .replace(/\n/g, ' ')                      // newlines → space
     .replace(/\s{2,}/g, ' ')                  // collapse whitespace
