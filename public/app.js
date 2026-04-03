@@ -7627,6 +7627,28 @@ function jarvisInitPanel() {
   if (main) main.classList.add('main-content-area');
 
   jpLoadHistory();
+  // Auto-poll for new messages every 5s
+  setInterval(jpPollNewMessages, 5000);
+}
+
+var _jpLastMessageTs = null;
+
+async function jpPollNewMessages() {
+  // Only poll when chat panel is visible
+  const panel = document.getElementById('jarvis-panel');
+  if (!panel || panel.style.display === 'none') return;
+  try {
+    const rows = await fetchJSON('/api/voice/history');
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    const newestTs = rows[0].created_at;
+    if (_jpLastMessageTs && newestTs !== _jpLastMessageTs) {
+      jpConversation = rows;
+      jpRenderHistory();
+    }
+    _jpLastMessageTs = newestTs;
+  } catch (e) {
+    // silent — don't spam errors for polling
+  }
 }
 
 function jarvisPanelToggleSettings() {
